@@ -1,0 +1,10 @@
+^C:\USERS\JIYA\DESKTOP\LEVEL-EDITOR\BUILD\CMAKEFILES\708DE671764888552DE31C3D783D89DE\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/JIYA/Desktop/level-editor -BC:/Users/JIYA/Desktop/level-editor/build --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file C:/Users/JIYA/Desktop/level-editor/build/level-editor.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

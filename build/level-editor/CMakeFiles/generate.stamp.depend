@@ -1,0 +1,7 @@
+# CMake generation dependency list for this directory.
+C:/Libraries/SDL3-3.2.20/cmake/SDL3Config.cmake
+C:/Libraries/SDL3-3.2.20/cmake/SDL3ConfigVersion.cmake
+C:/Libraries/SDL3-3.2.20/cmake/sdlcpu.cmake
+C:/Program Files/CMake/share/cmake-4.1/Modules/CMakePushCheckState.cmake
+C:/Program Files/CMake/share/cmake-4.1/Modules/FeatureSummary.cmake
+C:/Users/JIYA/Desktop/level-editor/level-editor/CMakeLists.txt

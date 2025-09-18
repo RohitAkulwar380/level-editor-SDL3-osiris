@@ -1,0 +1,16 @@
+{
+  "version": "0.2.1",
+  "defaults": {},
+  "configurations": [
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "level-editor.exe (level-editor\\level-editor.exe)",
+      "name": "level-editor.exe (level-editor\\level-editor.exe)",
+        "env": {
+            "PATH": "C:\\Libraries\\SDL3-3.2.20\\lib\\x64;C:\\Libraries\\SDL3_image-devel-3.2.4-VC\\SDL3_image-3.2.4\\lib\\x64;%PATH%"
+        },
+      "currentDir": "C:\\Users\\JIYA\\Desktop\\level-editor"
+    }
+  ]
+}
