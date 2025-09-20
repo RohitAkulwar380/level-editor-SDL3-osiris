@@ -6,4 +6,5 @@ CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
 Makefile
-out/build
+out/build/
+/build/

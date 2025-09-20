@@ -17,9 +17,10 @@
     "",
     "\\assets\\isometric tileset",
     "\\assets\\isometric tileset\\separated images",
+    "\\build",
     "\\build\\level-editor",
     "\\level-editor"
   ],
-  "SelectedNode": "\\level-editor\\CMakeLists.txt",
+  "SelectedNode": "\\build",
   "PreviewInSolutionExplorer": false
 }
