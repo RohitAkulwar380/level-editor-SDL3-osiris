@@ -1,8 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"C:/Users/JIYA/Desktop/level-editor/build/cmake_install.cmake",
-		"C:/Users/JIYA/Desktop/level-editor/build/level-editor/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

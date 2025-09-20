@@ -1,3 +1,0 @@
-C:/Users/JIYA/Desktop/level-editor/build/CMakeFiles/ALL_BUILD.dir
-C:/Users/JIYA/Desktop/level-editor/build/CMakeFiles/ZERO_CHECK.dir
-C:/Users/JIYA/Desktop/level-editor/build/level-editor/CMakeFiles/level-editor.dir
