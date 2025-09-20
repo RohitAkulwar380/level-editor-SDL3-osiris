@@ -15,7 +15,11 @@
   },
   "ExpandedNodes": [
     "",
+    "\\assets\\isometric tileset",
+    "\\assets\\isometric tileset\\separated images",
+    "\\build\\level-editor",
     "\\level-editor"
   ],
+  "SelectedNode": "\\level-editor\\CMakeLists.txt",
   "PreviewInSolutionExplorer": false
 }

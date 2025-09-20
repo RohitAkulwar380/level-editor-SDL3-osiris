@@ -1,8 +1,8 @@
-# Install script for directory: C:/Users/JIYA/Desktop/level-editor/level-editor
+# Install script for directory: D:/codingStudy/IMED MCA/Sem - 3/Project/level-editor-SDL3-osiris/level-editor
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
-  set(CMAKE_INSTALL_PREFIX "C:/Users/JIYA/Desktop/level-editor/out/install/x64-debug-user")
+  set(CMAKE_INSTALL_PREFIX "D:/codingStudy/IMED MCA/Sem - 3/Project/level-editor-SDL3-osiris/out/install/x64-debug-user")
 endif()
 string(REGEX REPLACE "/$" "" CMAKE_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}")
 
@@ -35,6 +35,6 @@ endif()
 string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT
        "${CMAKE_INSTALL_MANIFEST_FILES}")
 if(CMAKE_INSTALL_LOCAL_ONLY)
-  file(WRITE "C:/Users/JIYA/Desktop/level-editor/out/build/x64-debug-user/level-editor/install_local_manifest.txt"
+  file(WRITE "D:/codingStudy/IMED MCA/Sem - 3/Project/level-editor-SDL3-osiris/out/build/x64-debug-user/level-editor/install_local_manifest.txt"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")
 endif()
