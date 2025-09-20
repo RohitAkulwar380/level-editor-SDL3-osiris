@@ -1,5 +1,0 @@
-C:/Users/JIYA/Desktop/level-editor/out/build/x64-debug/CMakeFiles/edit_cache.dir
-C:/Users/JIYA/Desktop/level-editor/out/build/x64-debug/CMakeFiles/rebuild_cache.dir
-C:/Users/JIYA/Desktop/level-editor/out/build/x64-debug/level-editor/CMakeFiles/level-editor.dir
-C:/Users/JIYA/Desktop/level-editor/out/build/x64-debug/level-editor/CMakeFiles/edit_cache.dir
-C:/Users/JIYA/Desktop/level-editor/out/build/x64-debug/level-editor/CMakeFiles/rebuild_cache.dir

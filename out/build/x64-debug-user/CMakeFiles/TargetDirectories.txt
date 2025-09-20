@@ -1,5 +1,0 @@
-D:/codingStudy/IMED MCA/Sem - 3/Project/level-editor-SDL3-osiris/out/build/x64-debug-user/CMakeFiles/edit_cache.dir
-D:/codingStudy/IMED MCA/Sem - 3/Project/level-editor-SDL3-osiris/out/build/x64-debug-user/CMakeFiles/rebuild_cache.dir
-D:/codingStudy/IMED MCA/Sem - 3/Project/level-editor-SDL3-osiris/out/build/x64-debug-user/level-editor/CMakeFiles/level-editor.dir
-D:/codingStudy/IMED MCA/Sem - 3/Project/level-editor-SDL3-osiris/out/build/x64-debug-user/level-editor/CMakeFiles/edit_cache.dir
-D:/codingStudy/IMED MCA/Sem - 3/Project/level-editor-SDL3-osiris/out/build/x64-debug-user/level-editor/CMakeFiles/rebuild_cache.dir

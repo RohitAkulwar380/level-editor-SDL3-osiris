@@ -1,10 +1,9 @@
 .vs/
 **/CMakeUserPresets.json
 **/launch.vs.json
-/out/build/
+**/out/build/
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
 Makefile
-out/build/
-/build/
+**/build/**
