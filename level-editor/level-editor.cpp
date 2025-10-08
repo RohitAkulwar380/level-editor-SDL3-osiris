@@ -1,499 +1,405 @@
-﻿// level-editor.cpp : Standalone Level Editor for Isometric RPG
-#include <SDL3/SDL.h>
-#include <SDL3/SDL_main.h>
-#include <SDL3_image/SDL_image.h>
-#include <glm/glm.hpp>
-#include <vector>
-#include <string>
-#include <array>
-#include <fstream>
+﻿#include <SDL3/SDL.h>
 #include <iostream>
+#include <vector>
+#include <cmath>
+#include <algorithm>
 
-using namespace std;
+// --- Configuration and Constants ---
+// NOTE: SCREEN_WIDTH/HEIGHT globals are only for initial window creation size.
+const int INITIAL_SCREEN_WIDTH = 1280;
+const int INITIAL_SCREEN_HEIGHT = 720;
+const int MAP_SIZE = 15;
+const float BASE_TILE_WIDTH = 128.0f;
 
-// Constants (same as main game)
-const int MAP_ROWS = 25;
-const int MAP_COLS = 25;
-const int TILE_SIZE = 32;
+// --- Global State ---
+SDL_Window* gWindow = nullptr;
+SDL_Renderer* gRenderer = nullptr;
 
-// Editor-specific enums
-enum class EditorMode {
-    PAINT, ERASE
+struct TileData {
+    int height;
+    SDL_Color color;
 };
 
-enum class TileType {
-    EMPTY = 0,
-    DIRT = 1,
-    GRASS = 2,
-    DIRT_PILLAR = 5
-};
+// Map state
+std::vector<std::vector<TileData>> gMap;
 
-// Simplified structures for editor
-struct SDLState {
-    SDL_Window* window;
-    SDL_Renderer* renderer;
-    int sc_width, sc_height, logW, logH;
+// Camera state
+float gZoomLevel = 1.0f;
+float gTileWidth = BASE_TILE_WIDTH;
+float gTileHeight = BASE_TILE_WIDTH / 2.0f;
+float gMapOffsetX = 0.0f;
+float gMapOffsetY = 0.0f;
 
-    SDLState() {
-        sc_width = 1280;
-        sc_height = 720;
-        logW = 640;
-        logH = 320;
-    }
-};
+// Panning state
+bool gIsDragging = false;
+float gLastMouseX = 0.0f;
+float gLastMouseY = 0.0f;
 
-struct EditorState {
-    EditorMode currentMode = EditorMode::PAINT;
-    TileType selectedTile = TileType::DIRT;
-    bool showGrid = true;
-    glm::ivec2 hoveredTile{ -1, -1 };
-    bool isMouseDown = false;
+// Snapping state (for smooth movement)
+float gTargetOffsetX = 0.0f;
+float gTargetOffsetY = 0.0f;
+bool gIsSnapping = false;
+const float SNAP_SPEED = 0.1f; // Lerp factor for smooth snapping
 
-    // Editor map data
-    short levelMap[MAP_ROWS][MAP_COLS];
+// --- Utility Functions (SDL Initialization and Cleanup) ---
 
-    EditorState() {
-        // Initialize with default tiles (dirt)
-        for (int r = 0; r < MAP_ROWS; r++) {
-            for (int c = 0; c < MAP_COLS; c++) {
-                levelMap[r][c] = static_cast<short>(TileType::DIRT);
-            }
-        }
-    }
-};
-
-struct Resources {
-    vector<SDL_Texture*> textures;
-    SDL_Texture* texDirt;
-    SDL_Texture* texGrass;
-    SDL_Texture* texDirtPillar;
-
-    SDL_Texture* loadTexture(SDL_Renderer* renderer, const string& filepath) {
-        SDL_Texture* tex = IMG_LoadTexture(renderer, filepath.c_str());
-        if (tex) {
-            SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_NEAREST);
-            textures.push_back(tex);
-        }
-        else {
-            cout << "Failed to load texture: " << filepath << endl;
-        }
-        return tex;
-    }
-
-    void load(SDLState& state) {
-        texDirt = loadTexture(state.renderer, "assets/map_assets/tile_003.png");
-        texGrass = loadTexture(state.renderer, "assets/map_assets/tile_040.png");
-        texDirtPillar = loadTexture(state.renderer, "assets/map_assets/tile_059.png");
-    }
-
-    void unload() {
-        for (SDL_Texture* tex : textures) {
-            SDL_DestroyTexture(tex);
-        }
-        textures.clear();
-    }
-
-    SDL_Texture* getTexture(TileType type) {
-        switch (type) {
-        case TileType::DIRT: return texDirt;
-        case TileType::GRASS: return texGrass;
-        case TileType::DIRT_PILLAR: return texDirtPillar;
-        default: return texDirt;
-        }
-    }
-};
-
-// Function declarations
-bool initialize(SDLState& state);
-void cleanup(SDLState& state);
-glm::vec2 orthoToIso(int col, int row, int tileSize, const SDLState& state);
-glm::ivec2 screenToGrid(int mouseX, int mouseY, const SDLState& state);
-void handleInput(SDLState& state, EditorState& editor);
-void renderTiles(SDLState& state, EditorState& editor, Resources& res);
-void renderGrid(SDLState& state, EditorState& editor);
-void renderUI(SDLState& state, EditorState& editor);
-void renderMouseHighlight(SDLState& state, EditorState& editor);
-void saveLevel(const EditorState& editor, const string& filename);
-void loadLevel(EditorState& editor, const string& filename);
-
-int main(int argc, char* argv[]) {
-    cout << "Level Editor Starting..." << endl;
-
-    SDLState state;
-
-    if (!initialize(state)) {
-        return 1;
-    }
-
-    // Load resources
-    Resources res;
-    res.load(state);
-
-    // Editor state
-    EditorState editor;
-
-    // Main loop
-    bool running = true;
-    while (running) {
-        SDL_Event event{ 0 };
-        while (SDL_PollEvent(&event)) {
-            switch (event.type) {
-            case SDL_EVENT_QUIT:
-                running = false;
-                break;
-
-            case SDL_EVENT_WINDOW_RESIZED:
-                state.sc_width = event.window.data1;
-                state.sc_height = event.window.data2;
-                break;
-
-            case SDL_EVENT_KEY_DOWN:
-                // Save level
-                if (event.key.key == 's' && (event.key.mod & SDL_KMOD_CTRL)) {
-                    saveLevel(editor, "editor_level");
-                }
-                // Load level  
-                if (event.key.key == 'l' && (event.key.mod & SDL_KMOD_CTRL)) {
-                    loadLevel(editor, "editor_level");
-                }
-                break;
-
-            case SDL_EVENT_MOUSE_BUTTON_DOWN:
-                if (event.button.button == SDL_BUTTON_LEFT) {
-                    editor.isMouseDown = true;
-                }
-                break;
-
-            case SDL_EVENT_MOUSE_BUTTON_UP:
-                if (event.button.button == SDL_BUTTON_LEFT) {
-                    editor.isMouseDown = false;
-                }
-                break;
-            }
-        }
-
-        // Handle continuous input
-        handleInput(state, editor);
-
-        // Render
-        SDL_SetRenderDrawColor(state.renderer, 64, 64, 64, 255); // Dark gray background
-        SDL_RenderClear(state.renderer);
-
-        // Render tiles
-        renderTiles(state, editor, res);
-
-        // Render grid
-        if (editor.showGrid) {
-            renderGrid(state, editor);
-        }
-
-        // Render mouse highlight
-        renderMouseHighlight(state, editor);
-
-        // Render UI
-        renderUI(state, editor);
-
-        SDL_RenderPresent(state.renderer);
-    }
-
-    res.unload();
-    cleanup(state);
-    cout << "Level Editor Shutting Down..." << endl;
-    return 0;
-}
-
-bool initialize(SDLState& state) {
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Error", "SDL3 Initialization Failed.", 0);
+bool init() {
+    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+        std::cerr << "SDL could not initialize! SDL_Error: " << SDL_GetError() << std::endl;
         return false;
     }
 
-    state.window = SDL_CreateWindow("Isometric Level Editor", state.sc_width, state.sc_height, SDL_WINDOW_RESIZABLE);
-    if (!state.window) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Error", "Window Creation Failed.", 0);
+    gWindow = SDL_CreateWindow("Isometric Map with Pan & Snap (SDL3)", INITIAL_SCREEN_WIDTH, INITIAL_SCREEN_HEIGHT, SDL_WINDOW_RESIZABLE);
+    if (gWindow == nullptr) {
+        std::cerr << "Window could not be created! SDL_Error: " << SDL_GetError() << std::endl;
         return false;
     }
 
-    state.renderer = SDL_CreateRenderer(state.window, nullptr);
-    if (!state.renderer) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Error", "Renderer Creation Failed.", state.window);
-        cleanup(state);
+    gRenderer = SDL_CreateRenderer(gWindow, nullptr);
+    if (gRenderer == nullptr) {
+        std::cerr << "Renderer could not be created! SDL_Error: " << SDL_GetError() << std::endl;
         return false;
     }
 
-    SDL_SetRenderLogicalPresentation(state.renderer, state.logW, state.logH, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+    SDL_SetRenderDrawBlendMode(gRenderer, SDL_BLENDMODE_BLEND);
     return true;
 }
 
-void cleanup(SDLState& state) {
-    SDL_DestroyRenderer(state.renderer);
-    SDL_DestroyWindow(state.window);
+void close() {
+    SDL_DestroyRenderer(gRenderer);
+    SDL_DestroyWindow(gWindow);
     SDL_Quit();
 }
 
-glm::vec2 orthoToIso(int col, int row, int tileSize, const SDLState& state) {
-    // Use the exact same conversion as your main game
-    int tileWidth = tileSize;
-    int tileHeight = tileSize / 2;
+/**
+ * Custom helper for drawing filled quadrilaterals (diamonds) using SDL_RenderGeometry.
+ * This function handles the conversion from SDL_Color (0-255) to SDL_FColor (0.0-1.0)
+ * required by SDL_RenderGeometry, resolving the C2679 error.
+ */
+void RenderFillPolygon(SDL_Renderer* renderer, const SDL_FPoint* vertices, int count) {
+    if (count != 4) return; // Only supports 4-sided diamond for this map
 
-    float isoX = (col - row) * (tileWidth / 2.0f);
-    float isoY = (col + row) * (tileHeight / 2.0f);
+    // Vertices: V0, V1, V2, V3
+    // Draw the quadrilateral as two triangles: (V0, V1, V2) and (V0, V2, V3)
 
-    float offsetX = state.logW / 2;
-    float offsetY = 0;
+    SDL_Vertex render_vertices[4];
+    SDL_Color color;
+    // Get the current draw color (in 0-255 range)
+    SDL_GetRenderDrawColor(renderer, &color.r, &color.g, &color.b, &color.a);
 
-    return glm::vec2(isoX + offsetX, isoY + offsetY);
+    for (int i = 0; i < count; ++i) {
+        render_vertices[i].position = vertices[i];
+
+        // Convert SDL_Color (uint8_t 0-255) to SDL_FColor (float 0.0-1.0)
+        render_vertices[i].color = {
+            (float)color.r / 255.0f,
+            (float)color.g / 255.0f,
+            (float)color.b / 255.0f,
+            (float)color.a / 255.0f
+        };
+
+        render_vertices[i].tex_coord = { 0.0f, 0.0f }; // No texture
+    }
+
+    // Indices for the two triangles
+    const int indices[6] = {
+        0, 1, 2, // Triangle 1 (Top, Right, Bottom)
+        0, 2, 3  // Triangle 2 (Top, Bottom, Left)
+    };
+
+    // Render the triangles
+    SDL_RenderGeometry(renderer, nullptr, render_vertices, count, indices, 6);
 }
 
-glm::ivec2 screenToGrid(int mouseX, int mouseY, const SDLState& state) {
-    // Convert screen coordinates to logical coordinates
-    float logicalX = (float)mouseX * state.logW / state.sc_width;
-    float logicalY = (float)mouseY * state.logH / state.sc_height;
+// --- Map Logic ---
 
-    // Adjust for isometric offset
-    float offsetX = state.logW / 2;
-    float offsetY = 0;
-
-    float adjustedX = logicalX - offsetX;
-    float adjustedY = logicalY - offsetY;
-
-    // Convert back to grid coordinates (inverse of orthoToIso)
-    int tileWidth = TILE_SIZE;
-    int tileHeight = TILE_SIZE / 2;
-
-    float tempCol = (adjustedX / (tileWidth / 2.0f) + adjustedY / (tileHeight / 2.0f)) / 2.0f;
-    float tempRow = (adjustedY / (tileHeight / 2.0f) - adjustedX / (tileWidth / 2.0f)) / 2.0f;
-
-    int col = static_cast<int>(tempCol + 0.5f); // Round to nearest
-    int row = static_cast<int>(tempRow + 0.5f); // Round to nearest
-
-    // Clamp to valid range
-    col = max(0, min(MAP_COLS - 1, col));
-    row = max(0, min(MAP_ROWS - 1, row));
-
-    return { col, row };
+void generateMap() {
+    gMap.resize(MAP_SIZE, std::vector<TileData>(MAP_SIZE));
+    for (int x = 0; x < MAP_SIZE; ++x) {
+        for (int y = 0; y < MAP_SIZE; ++y) {
+            gMap[x][y].height = rand() % 3; // 0, 1, or 2
+            gMap[x][y].color = { 60, 180, 120, 255 }; // Teal/Green color
+        }
+    }
 }
 
-void handleInput(SDLState& state, EditorState& editor) {
-    // Get mouse position
-    float mouseX, mouseY;
-    SDL_GetMouseState(&mouseX, &mouseY);
+// Update tile size based on current zoom level
+void updateTileSizes() {
+    gTileWidth = BASE_TILE_WIDTH * gZoomLevel;
+    gTileHeight = gTileWidth / 2.0f;
+}
 
-    // Update hovered tile
-    editor.hoveredTile = screenToGrid((int)mouseX, (int)mouseY, state);
+// Convert cartesian (x, y) coordinates to screen (px, py) coordinates
+SDL_FPoint cartesianToScreen(float x, float y) {
+    float px = gMapOffsetX + (x - y) * gTileWidth / 2.0f;
+    float py = gMapOffsetY + (x + y) * gTileHeight / 2.0f;
+    return { px, py };
+}
 
-    // Handle tile painting
-    if (editor.isMouseDown) {
-        int col = editor.hoveredTile.x;
-        int row = editor.hoveredTile.y;
+// Convert screen (px, py) coordinates to cartesian (x, y) coordinates (Inverse Projection)
+SDL_FPoint screenToCartesian(float px, float py) {
+    // Coords relative to map origin (0,0) before offset
+    float relativeX = px - gMapOffsetX;
+    float relativeY = py - gMapOffsetY;
 
-        if (col >= 0 && col < MAP_COLS && row >= 0 && row < MAP_ROWS) {
-            if (editor.currentMode == EditorMode::PAINT) {
-                editor.levelMap[row][col] = static_cast<short>(editor.selectedTile);
-            }
-            else if (editor.currentMode == EditorMode::ERASE) {
-                editor.levelMap[row][col] = static_cast<short>(TileType::EMPTY);
-            }
+    // Inverse Isometric Projection:
+    float x = (relativeY / gTileHeight) + (relativeX / gTileWidth);
+    float y = (relativeY / gTileHeight) - (relativeX / gTileWidth);
+
+    return { x, y };
+}
+
+void drawTile(int x, int y, const TileData& data) {
+    SDL_FPoint screenPos = cartesianToScreen((float)x, (float)y);
+    float px = screenPos.x;
+    float py = screenPos.y;
+    int h = data.height;
+
+    // Get current window size for culling optimization
+    int windowW, windowH;
+    SDL_GetWindowSize(gWindow, &windowW, &windowH);
+
+    // Optimization: Don't draw if completely off-screen
+    if (px + gTileWidth < 0 || px - gTileWidth > windowW ||
+        py + gTileHeight < 0 || py - gTileHeight > windowH) {
+        return;
+    }
+
+    // Define the diamond shape vertices for the top surface
+    SDL_FPoint vertices[4];
+    float height_offset = h * gZoomLevel * 5.0f; // Height visual based on zoom
+
+    // 1. Top Point
+    vertices[0] = { px, py - height_offset };
+    // 2. Right Point
+    vertices[1] = { px + gTileWidth / 2.0f, py + gTileHeight / 2.0f - height_offset };
+    // 3. Bottom Point
+    vertices[2] = { px, py + gTileHeight - height_offset };
+    // 4. Left Point
+    vertices[3] = { px - gTileWidth / 2.0f, py + gTileHeight / 2.0f - height_offset };
+
+    // --- Draw the Top Surface (using the custom RenderFillPolygon) ---
+    SDL_Color baseColor = data.color;
+    SDL_SetRenderDrawColor(gRenderer, baseColor.r, baseColor.g, baseColor.b, 255);
+    RenderFillPolygon(gRenderer, vertices, 4);
+
+    // --- Draw Border ---
+    SDL_FPoint borderVertices[5] = { vertices[0], vertices[1], vertices[2], vertices[3], vertices[0] };
+
+    SDL_SetRenderDrawColor(gRenderer, 30, 80, 50, 255); // Darker border color
+    SDL_RenderLines(gRenderer, borderVertices, 5); // Draw the diamond border
+
+    // --- Draw the sides (optional but good for 3D feel) ---
+    if (h > 0) {
+        SDL_SetRenderDrawColor(gRenderer, 80, 200, 140, 255); // Lighter side color
+        SDL_FPoint sideVerticesLeft[4];
+        // Left side vertices: V3(Top-Left), V2(Top-Bottom), V2_base, V3_base
+        sideVerticesLeft[0] = vertices[3]; // Top-Left
+        sideVerticesLeft[1] = vertices[2]; // Top-Bottom
+        sideVerticesLeft[2] = { px, py + gTileHeight + height_offset }; // Bottom-Bottom (at base height)
+        sideVerticesLeft[3] = { px - gTileWidth / 2.0f, py + gTileHeight / 2.0f + height_offset }; // Bottom-Left (at base height)
+        RenderFillPolygon(gRenderer, sideVerticesLeft, 4);
+
+        SDL_SetRenderDrawColor(gRenderer, 80, 200, 140, 255); // Ensure color is set before drawing right side
+        // Right side vertices: V1(Top-Right), V2(Top-Bottom), V2_base, V1_base
+        SDL_FPoint sideVerticesRight[4];
+        sideVerticesRight[0] = vertices[1]; // Top-Right
+        sideVerticesRight[1] = vertices[2]; // Top-Bottom
+        sideVerticesRight[2] = { px, py + gTileHeight + height_offset }; // Bottom-Bottom (at base height)
+        sideVerticesRight[3] = { px + gTileWidth / 2.0f, py + gTileHeight / 2.0f + height_offset }; // Bottom-Right (at base height)
+        RenderFillPolygon(gRenderer, sideVerticesRight, 4);
+    }
+}
+
+void draw() {
+    // Clear screen (Dark blue background)
+    SDL_SetRenderDrawColor(gRenderer, 31, 41, 55, 255);
+    SDL_RenderClear(gRenderer);
+
+    updateTileSizes();
+
+    // Draw map tiles in order (back to front: top-left to bottom-right)
+    for (int x = 0; x < MAP_SIZE; ++x) {
+        for (int y = 0; y < MAP_SIZE; ++y) {
+            drawTile(x, y, gMap[x][y]);
         }
     }
 
-    // Keyboard shortcuts using SDL3 keyboard state
-    const bool* keyboardState = SDL_GetKeyboardState(nullptr);
+    // Present the renderer
+    SDL_RenderPresent(gRenderer);
+}
 
-    if (keyboardState[SDL_SCANCODE_1]) editor.selectedTile = TileType::DIRT;
-    if (keyboardState[SDL_SCANCODE_2]) editor.selectedTile = TileType::GRASS;
-    if (keyboardState[SDL_SCANCODE_3]) editor.selectedTile = TileType::DIRT_PILLAR;
+// --- Snapping Logic ---
 
-    if (keyboardState[SDL_SCANCODE_P]) editor.currentMode = EditorMode::PAINT;
-    if (keyboardState[SDL_SCANCODE_E]) editor.currentMode = EditorMode::ERASE;
+void snapToNearestTile() {
+    // 1. Get the screen center coordinates
+    int windowW, windowH;
+    // NOTE: SDL_GetWindowSize expects non-const int pointers.
+    SDL_GetWindowSize(gWindow, &windowW, &windowH);
+    float centerX = windowW / 2.0f;
+    float centerY = windowH / 2.0f;
 
-    // Toggle grid
-    static bool gKeyPressed = false;
-    if (keyboardState[SDL_SCANCODE_G]) {
-        if (!gKeyPressed) {
-            editor.showGrid = !editor.showGrid;
-            gKeyPressed = true;
-        }
-    }
-    else {
-        gKeyPressed = false;
+    // 2. Find the tile currently at the center of the screen (in floating-point Cartesian)
+    SDL_FPoint centerCart = screenToCartesian(centerX, centerY);
+
+    // 3. Determine the target tile (round to nearest integer)
+    int snappedX = std::max(0, std::min(MAP_SIZE - 1, (int)std::round(centerCart.x)));
+    int snappedY = std::max(0, std::min(MAP_SIZE - 1, (int)std::round(centerCart.y)));
+
+    // 4. Calculate the required new map offset to center that tile
+    // Calculate the screen position of the target tile if map offset was (0,0)
+    float targetOriginX = (snappedX - snappedY) * gTileWidth / 2.0f;
+    float targetOriginY = (snappedX + snappedY) * gTileHeight / 2.0f;
+
+    // New offset is the difference needed to move the target tile's screen position to the center
+    gTargetOffsetX = centerX - targetOriginX;
+    gTargetOffsetY = centerY - targetOriginY;
+
+    // Start snapping animation
+    gIsSnapping = true;
+}
+
+// Update the camera offset smoothly towards the target offset
+void updateCamera() {
+    if (!gIsSnapping) return;
+
+    // Linear interpolation (Lerp) for smooth movement
+    gMapOffsetX = gMapOffsetX + (gTargetOffsetX - gMapOffsetX) * SNAP_SPEED;
+    gMapOffsetY = gMapOffsetY + (gTargetOffsetY - gMapOffsetY) * SNAP_SPEED;
+
+    // Check if we are close enough to stop snapping
+    if (std::abs(gTargetOffsetX - gMapOffsetX) < 1.0f &&
+        std::abs(gTargetOffsetY - gMapOffsetY) < 1.0f) {
+
+        gMapOffsetX = gTargetOffsetX;
+        gMapOffsetY = gTargetOffsetY;
+        gIsSnapping = false;
     }
 }
 
-void renderTiles(SDLState& state, EditorState& editor, Resources& res) {
-    for (int r = 0; r < MAP_ROWS; r++) {
-        for (int c = 0; c < MAP_COLS; c++) {
-            TileType tileType = static_cast<TileType>(editor.levelMap[r][c]);
+// --- Event Handling ---
+/**
+ * Centralized function to poll all events and set the quit flag if needed.
+ */
+void handleEvents(bool& quit_flag) {
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {
+        switch (event.type) {
+        case SDL_EVENT_QUIT:
+            quit_flag = true; // Set the main loop's quit flag
+            break;
+        case SDL_EVENT_WINDOW_RESIZED:
+        case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+            // Window size is handled locally in relevant functions (drawTile, snapToNearestTile)
+            break;
 
-            if (tileType != TileType::EMPTY) {
-                glm::vec2 isoPos = orthoToIso(c, r, TILE_SIZE, state);
+        case SDL_EVENT_MOUSE_WHEEL: {
+            gIsSnapping = false; // Stop snapping on zoom
 
-                SDL_FRect dst = {
-                    .x = isoPos.x,
-                    .y = isoPos.y,
-                    .w = TILE_SIZE,
-                    .h = TILE_SIZE
-                };
+            float zoomChange = (event.wheel.y > 0) ? 1.1f : 1.0f / 1.1f;
+            float oldZoom = gZoomLevel;
+            gZoomLevel = std::max(0.5f, std::min(3.0f, gZoomLevel * zoomChange));
 
-                SDL_Texture* texture = res.getTexture(tileType);
-                if (texture) {
-                    SDL_RenderTexture(state.renderer, texture, nullptr, &dst);
+            if (oldZoom != gZoomLevel) {
+                // Get mouse position for zoom centering
+                float mouseX, mouseY;
+                SDL_GetMouseState(&mouseX, &mouseY);
+
+                // Calculate the cartesian point that should remain stationary
+                SDL_FPoint stationaryCart = screenToCartesian(mouseX, mouseY);
+
+                // Update tile sizes for new zoom level
+                updateTileSizes();
+
+                // Calculate where that stationary cartesian point should now be drawn
+                float newTargetX = (stationaryCart.x - stationaryCart.y) * gTileWidth / 2.0f;
+                float newTargetY = (stationaryCart.x + stationaryCart.y) * gTileHeight / 2.0f;
+
+                // Adjust offset to keep mouse position stable (zoom centered on cursor)
+                gMapOffsetX = mouseX - newTargetX;
+                gMapOffsetY = mouseY - newTargetY;
+            }
+            break;
+        }
+
+        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+            if (event.button.button == SDL_BUTTON_LEFT) {
+                gIsDragging = true;
+                gIsSnapping = false; // Stop snapping when drag starts
+                gLastMouseX = event.button.x;
+                gLastMouseY = event.button.y;
+            }
+            break;
+
+        case SDL_EVENT_MOUSE_BUTTON_UP:
+            if (event.button.button == SDL_BUTTON_LEFT) {
+                if (gIsDragging) {
+                    gIsDragging = false;
+                    // Trigger snap only after a drag is complete
+                    snapToNearestTile();
                 }
             }
-        }
-    }
-}
+            break;
 
-void renderGrid(SDLState& state, EditorState& editor) {
-    SDL_SetRenderDrawColor(state.renderer, 255, 255, 255, 80); // Semi-transparent white
+        case SDL_EVENT_MOUSE_MOTION:
+            if (gIsDragging) {
+                float currentX = event.motion.x;
+                float currentY = event.motion.y;
 
-    for (int r = 0; r <= MAP_ROWS; r++) {
-        for (int c = 0; c <= MAP_COLS; c++) {
-            // Skip if we're outside the actual grid bounds
-            if (r >= MAP_ROWS && c >= MAP_COLS) continue;
+                float deltaX = currentX - gLastMouseX;
+                float deltaY = currentY - gLastMouseY;
 
-            glm::vec2 isoPos = orthoToIso(c, r, TILE_SIZE, state);
+                gMapOffsetX += deltaX;
+                gMapOffsetY += deltaY;
 
-            // Draw horizontal grid lines (connecting to the right)
-            if (c < MAP_COLS) {
-                glm::vec2 rightPos = orthoToIso(c + 1, r, TILE_SIZE, state);
-                SDL_RenderLine(state.renderer,
-                    isoPos.x, isoPos.y + TILE_SIZE / 2,
-                    rightPos.x, rightPos.y + TILE_SIZE / 2);
+                gLastMouseX = currentX;
+                gLastMouseY = currentY;
             }
-
-            // Draw vertical grid lines (connecting downward)
-            if (r < MAP_ROWS) {
-                glm::vec2 downPos = orthoToIso(c, r + 1, TILE_SIZE, state);
-                SDL_RenderLine(state.renderer,
-                    isoPos.x + TILE_SIZE / 2, isoPos.y,
-                    downPos.x + TILE_SIZE / 2, downPos.y);
-            }
+            break;
         }
     }
 }
 
-void renderMouseHighlight(SDLState& state, EditorState& editor) {
-    if (editor.hoveredTile.x >= 0 && editor.hoveredTile.y >= 0 &&
-        editor.hoveredTile.x < MAP_COLS && editor.hoveredTile.y < MAP_ROWS) {
+// --- Main Loop ---
 
-        glm::vec2 isoPos = orthoToIso(editor.hoveredTile.x, editor.hoveredTile.y, TILE_SIZE, state);
-
-        // Yellow highlight with transparency
-        SDL_SetRenderDrawColor(state.renderer, 255, 255, 0, 100);
-        SDL_FRect highlight = {
-            .x = isoPos.x,
-            .y = isoPos.y,
-            .w = TILE_SIZE,
-            .h = TILE_SIZE
-        };
-        SDL_RenderFillRect(state.renderer, &highlight);
-
-        // Yellow border
-        SDL_SetRenderDrawColor(state.renderer, 255, 255, 0, 255);
-        SDL_RenderRect(state.renderer, &highlight);
-    }
-}
-
-void renderUI(SDLState& state, EditorState& editor) {
-    // UI Panel background
-    SDL_SetRenderDrawColor(state.renderer, 0, 0, 0, 200);
-    SDL_FRect panel = { 5, 5, 150, 100 };
-    SDL_RenderFillRect(state.renderer, &panel);
-
-    SDL_SetRenderDrawColor(state.renderer, 255, 255, 255, 255);
-    SDL_RenderRect(state.renderer, &panel);
-
-    // Tile selection buttons
-    int buttonY = 15;
-    int buttonSize = 20;
-    int buttonSpacing = 25;
-
-    // Dirt button (brown)
-    SDL_SetRenderDrawColor(state.renderer,
-        editor.selectedTile == TileType::DIRT ? 255 : 139,
-        editor.selectedTile == TileType::DIRT ? 255 : 69,
-        editor.selectedTile == TileType::DIRT ? 0 : 19, 255);
-    SDL_FRect dirtBtn = { 15, buttonY, buttonSize, buttonSize };
-    SDL_RenderFillRect(state.renderer, &dirtBtn);
-
-    // Grass button (green)
-    SDL_SetRenderDrawColor(state.renderer,
-        editor.selectedTile == TileType::GRASS ? 255 : 34,
-        editor.selectedTile == TileType::GRASS ? 255 : 139,
-        editor.selectedTile == TileType::GRASS ? 0 : 34, 255);
-    SDL_FRect grassBtn = { 15 + buttonSpacing, buttonY, buttonSize, buttonSize };
-    SDL_RenderFillRect(state.renderer, &grassBtn);
-
-    // Dirt Pillar button (dark brown)
-    SDL_SetRenderDrawColor(state.renderer,
-        editor.selectedTile == TileType::DIRT_PILLAR ? 255 : 101,
-        editor.selectedTile == TileType::DIRT_PILLAR ? 255 : 67,
-        editor.selectedTile == TileType::DIRT_PILLAR ? 0 : 33, 255);
-    SDL_FRect pillarBtn = { 15 + buttonSpacing * 2, buttonY, buttonSize, buttonSize };
-    SDL_RenderFillRect(state.renderer, &pillarBtn);
-
-    // Mode indicator
-    buttonY += 30;
-    SDL_SetRenderDrawColor(state.renderer,
-        editor.currentMode == EditorMode::PAINT ? 0 : 255,
-        editor.currentMode == EditorMode::PAINT ? 255 : 0,
-        0, 255);
-    SDL_FRect modeBtn = { 15, buttonY, 40, 15 };
-    SDL_RenderFillRect(state.renderer, &modeBtn);
-
-    // Status text area (placeholder for now)
-    SDL_SetRenderDrawColor(state.renderer, 50, 50, 50, 255);
-    SDL_FRect statusArea = { 15, buttonY + 20, 120, 20 };
-    SDL_RenderFillRect(state.renderer, &statusArea);
-}
-
-void saveLevel(const EditorState& editor, const string& filename) {
-    ofstream file(filename + ".csv");
-    if (!file.is_open()) {
-        cout << "Failed to open file for writing: " << filename << ".csv" << endl;
-        return;
+int main(int argc, char* args[]) {
+    if (!init()) {
+        std::cerr << "Failed to initialize!" << std::endl;
+        return 1;
     }
 
-    for (int r = 0; r < MAP_ROWS; r++) {
-        for (int c = 0; c < MAP_COLS; c++) {
-            file << editor.levelMap[r][c];
-            if (c < MAP_COLS - 1) file << ",";
-        }
-        file << "\n";
+    generateMap();
+
+    // Initial centering of the map
+    updateTileSizes();
+    float initialCartX = (MAP_SIZE - 1) / 2.0f;
+    float initialCartY = (MAP_SIZE - 1) / 2.0f;
+    float targetOriginX = (initialCartX - initialCartY) * gTileWidth / 2.0f;
+    float targetOriginY = (initialCartX + initialCartY) * gTileHeight / 2.0f;
+
+    // Center the map view initially
+    gMapOffsetX = INITIAL_SCREEN_WIDTH / 2.0f - targetOriginX;
+    gMapOffsetY = INITIAL_SCREEN_HEIGHT / 2.0f - targetOriginY;
+
+
+    bool quit = false;
+    Uint64 lastTime = SDL_GetTicks();
+
+    while (!quit) {
+        Uint64 currentTime = SDL_GetTicks();
+        // float deltaTime = (currentTime - lastTime) / 1000.0f; // DeltaTime currently unused
+        lastTime = currentTime;
+
+        // --- Handle Events ---
+        handleEvents(quit); // Centralized event polling
+
+        // --- Update ---
+        updateCamera(); // Smoothly move camera if snapping
+
+        // --- Render ---
+        draw();
     }
 
-    file.close();
-    cout << "Level saved successfully: " << filename << ".csv" << endl;
-}
-
-void loadLevel(EditorState& editor, const string& filename) {
-    ifstream file(filename + ".csv");
-    if (!file.is_open()) {
-        cout << "Failed to open file for reading: " << filename << ".csv" << endl;
-        return;
-    }
-
-    string line;
-    int row = 0;
-
-    while (getline(file, line) && row < MAP_ROWS) {
-        int col = 0;
-        size_t pos = 0;
-
-        while (pos < line.length() && col < MAP_COLS) {
-            size_t nextComma = line.find(',', pos);
-            if (nextComma == string::npos) nextComma = line.length();
-
-            string valueStr = line.substr(pos, nextComma - pos);
-            editor.levelMap[row][col] = stoi(valueStr);
-
-            col++;
-            pos = nextComma + 1;
-        }
-        row++;
-    }
-
-    file.close();
-    cout << "Level loaded successfully: " << filename << ".csv" << endl;
+    close();
+    return 0;
 }
