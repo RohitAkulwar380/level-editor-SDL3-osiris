@@ -49,7 +49,7 @@ bool init() {
         return false;
     }
 
-    gWindow = SDL_CreateWindow("Isometric Map with Pan & Snap (SDL3)", INITIAL_SCREEN_WIDTH, INITIAL_SCREEN_HEIGHT, SDL_WINDOW_RESIZABLE);
+    gWindow = SDL_CreateWindow("Osiris Level-editor", INITIAL_SCREEN_WIDTH, INITIAL_SCREEN_HEIGHT, SDL_WINDOW_RESIZABLE);
     if (gWindow == nullptr) {
         std::cerr << "Window could not be created! SDL_Error: " << SDL_GetError() << std::endl;
         return false;
