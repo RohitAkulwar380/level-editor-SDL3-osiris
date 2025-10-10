@@ -3,357 +3,473 @@
 #include <vector>
 #include <cmath>
 #include <algorithm>
+#include <string>
+#include <fstream>
+#include <sstream> 
+#include <cstdio> 
 
 // --- Configuration and Constants ---
-// NOTE: SCREEN_WIDTH/HEIGHT globals are only for initial window creation size.
 const int INITIAL_SCREEN_WIDTH = 1280;
 const int INITIAL_SCREEN_HEIGHT = 720;
-const int MAP_SIZE = 15;
+int gMapSize = 40;
 const float BASE_TILE_WIDTH = 128.0f;
 
-// --- Global State ---
-SDL_Window* gWindow = nullptr;
-SDL_Renderer* gRenderer = nullptr;
+const std::string SAVE_PATH = "D:\\codingStudy\\IMED MCA\\Sem - 3\\Project\\level-editor-SDL3-osiris\\assets\\levels\\";
 
+// --- Data Structures ---
 struct TileData {
     int height;
     SDL_Color color;
 };
 
-// Map state
-std::vector<std::vector<TileData>> gMap;
+struct Level {
+    std::vector<std::vector<TileData>> map;
+    float zoomLevel = 1.0f;
+    float mapOffsetX = 0.0f;
+    float mapOffsetY = 0.0f;
+    float targetOffsetX = 0.0f;
+    float targetOffsetY = 0.0f;
+};
 
-// Camera state
-float gZoomLevel = 1.0f;
-float gTileWidth = BASE_TILE_WIDTH;
-float gTileHeight = BASE_TILE_WIDTH / 2.0f;
-float gMapOffsetX = 0.0f;
-float gMapOffsetY = 0.0f;
-
-// Panning state
+// --- Global State ---
+SDL_Window* gWindow = nullptr;
+SDL_Renderer* gRenderer = nullptr;
+std::vector<Level> gLevels;
+size_t gCurrentLevelIndex = 0;
 bool gIsDragging = false;
 float gLastMouseX = 0.0f;
 float gLastMouseY = 0.0f;
-
-// Snapping state (for smooth movement)
-float gTargetOffsetX = 0.0f;
-float gTargetOffsetY = 0.0f;
 bool gIsSnapping = false;
-const float SNAP_SPEED = 0.1f; // Lerp factor for smooth snapping
+const float SNAP_SPEED = 0.1f;
 
-// --- Utility Functions (SDL Initialization and Cleanup) ---
-
-bool init() {
-    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
-        std::cerr << "SDL could not initialize! SDL_Error: " << SDL_GetError() << std::endl;
-        return false;
+// --- Utility Functions ---
+void RenderFillPolygon(SDL_Renderer* renderer, const SDL_FPoint* vertices, int count) {
+    if (count != 4) return;
+    SDL_Vertex render_vertices[4];
+    SDL_Color color;
+    SDL_GetRenderDrawColor(renderer, &color.r, &color.g, &color.b, &color.a);
+    for (int i = 0; i < count; ++i) {
+        render_vertices[i].position = vertices[i];
+        render_vertices[i].color = { (float)color.r / 255.0f, (float)color.g / 255.0f, (float)color.b / 255.0f, (float)color.a / 255.0f };
+        render_vertices[i].tex_coord = { 0.0f, 0.0f };
     }
+    const int indices[6] = { 0, 1, 2, 0, 2, 3 };
+    SDL_RenderGeometry(renderer, nullptr, render_vertices, count, indices, 6);
+}
 
-    gWindow = SDL_CreateWindow("Osiris Level-editor", INITIAL_SCREEN_WIDTH, INITIAL_SCREEN_HEIGHT, SDL_WINDOW_RESIZABLE);
-    if (gWindow == nullptr) {
-        std::cerr << "Window could not be created! SDL_Error: " << SDL_GetError() << std::endl;
-        return false;
+// FIX #1: The function signature is corrected to accept a size parameter.
+std::vector<std::vector<TileData>> generateMap(int mapSize) {
+    std::vector<std::vector<TileData>> map;
+    map.resize(mapSize, std::vector<TileData>(mapSize));
+    for (int x = 0; x < mapSize; ++x) {
+        for (int y = 0; y < mapSize; ++y) {
+            map[x][y].height = 0;
+            map[x][y].color = { 60, 180, 120, 255 };
+        }
     }
+    return map;
+}
 
-    gRenderer = SDL_CreateRenderer(gWindow, nullptr);
-    if (gRenderer == nullptr) {
-        std::cerr << "Renderer could not be created! SDL_Error: " << SDL_GetError() << std::endl;
-        return false;
+// --- Level State Management ---
+void addInitialLevels(int count) {
+    if (gLevels.empty()) {
+        for (int i = 0; i < count; ++i) {
+            gLevels.push_back({ generateMap(gMapSize) });
+        }
     }
+}
 
-    SDL_SetRenderDrawBlendMode(gRenderer, SDL_BLENDMODE_BLEND);
+void addNewLevel() {
+    gLevels.push_back({ generateMap(gMapSize) });
+    gCurrentLevelIndex = gLevels.size() - 1;
+    std::cout << "[Status] New level created (" << gMapSize << "x" << gMapSize << "). You are now on Level " << gCurrentLevelIndex + 1 << "." << std::endl;
+}
+
+void deleteCurrentLevel() {
+    if (gLevels.size() > 1) {
+        std::cout << "[Status] Level " << gCurrentLevelIndex + 1 << " deleted." << std::endl;
+        gLevels.erase(gLevels.begin() + gCurrentLevelIndex);
+        if (gCurrentLevelIndex >= gLevels.size()) {
+            gCurrentLevelIndex = gLevels.size() - 1;
+        }
+    }
+    else {
+        std::cerr << "Cannot delete the last level." << std::endl;
+    }
+}
+
+// --- Serialization (Multi-File CSV) ---
+bool saveLevels() {
+    std::cout << "[Action] Saving all levels to separate files..." << std::endl;
+    for (size_t i = 0; i < gLevels.size(); ++i) {
+        std::string filename = SAVE_PATH + "level_" + std::to_string(i + 1) + ".csv";
+        std::ofstream file(filename);
+        if (!file.is_open()) {
+            std::cerr << "Error: Could not save " << filename << ". Please ensure the path exists." << std::endl;
+            continue;
+        }
+        const auto& level = gLevels[i];
+        int mapSize = level.map.size();
+        file << level.zoomLevel << "," << level.mapOffsetX << "," << level.mapOffsetY << "," << mapSize << "\n";
+        for (int y = 0; y < mapSize; ++y) {
+            for (int x = 0; x < mapSize; ++x) {
+                file << level.map[x][y].height << (x < mapSize - 1 ? "," : "");
+            }
+            file << "\n";
+        }
+        file.close();
+    }
+    size_t levelIndexToDelete = gLevels.size() + 1;
+    while (true) {
+        std::string filename_to_check = SAVE_PATH + "level_" + std::to_string(levelIndexToDelete) + ".csv";
+        if (std::ifstream(filename_to_check).good()) {
+            if (std::remove(filename_to_check.c_str()) == 0) {
+                std::cout << "[Status] Cleaned up orphan file: " << filename_to_check << std::endl;
+            }
+        }
+        else {
+            break;
+        }
+        levelIndexToDelete++;
+    }
+    std::cout << "[Status] Save successful." << std::endl;
     return true;
 }
 
+bool loadLevels() {
+    std::cout << "[Action] Searching for level files in " << SAVE_PATH << "..." << std::endl;
+    gLevels.clear();
+    int levelIndex = 1;
+    while (true) {
+        std::string filename = SAVE_PATH + "level_" + std::to_string(levelIndex) + ".csv";
+        std::ifstream file(filename);
+        if (!file.is_open()) break;
+
+        Level level;
+        std::string line, value;
+
+        if (!std::getline(file, line)) break;
+        std::stringstream header_ss(line);
+        std::getline(header_ss, value, ','); level.zoomLevel = std::stof(value);
+        std::getline(header_ss, value, ','); level.mapOffsetX = std::stof(value);
+        std::getline(header_ss, value, ','); level.mapOffsetY = std::stof(value);
+
+        int mapSize = 0;
+        if (std::getline(header_ss, value, ',')) {
+            mapSize = std::stoi(value);
+        }
+        else {
+            mapSize = 40;
+        }
+
+        level.targetOffsetX = level.mapOffsetX;
+        level.targetOffsetY = level.mapOffsetY;
+
+        level.map = generateMap(mapSize);
+        for (int y = 0; y < mapSize; ++y) {
+            if (!std::getline(file, line)) break;
+            std::stringstream map_row_ss(line);
+            for (int x = 0; x < mapSize; ++x) {
+                if (!std::getline(map_row_ss, value, ',')) break;
+                level.map[x][y].height = std::stoi(value);
+            }
+        }
+        gLevels.push_back(level);
+        levelIndex++;
+    }
+    if (!gLevels.empty()) {
+        gCurrentLevelIndex = 0;
+        gMapSize = gLevels[0].map.size();
+        std::cout << "[Status] " << gLevels.size() << " level(s) successfully retrieved." << std::endl;
+        return true;
+    }
+    std::cerr << "Info: No level files found. Starting new session." << std::endl;
+    return false;
+}
+
+// --- Coordinate Systems and Camera ---
+void updateTileSizes(float zoomLevel, float& tileWidth, float& tileHeight) {
+    tileWidth = BASE_TILE_WIDTH * zoomLevel;
+    tileHeight = tileWidth / 2.0f;
+}
+SDL_FPoint getMapViewCenter() {
+    int windowW, windowH;
+    SDL_GetWindowSize(gWindow, &windowW, &windowH);
+    return { (float)windowW / 2.0f, (float)windowH / 2.0f };
+}
+SDL_FPoint cartesianToScreen(float x, float y, float tileWidth, float tileHeight, float mapOffsetX, float mapOffsetY) {
+    float px = (x - y) * (tileWidth / 2.0f);
+    float py = (x + y) * (tileHeight / 2.0f);
+    SDL_FPoint center = getMapViewCenter();
+    px += center.x + mapOffsetX;
+    py += center.y + mapOffsetY;
+    return { px, py };
+}
+SDL_FPoint screenToCartesian(float px, float py, float tileWidth, float tileHeight, float mapOffsetX, float mapOffsetY) {
+    SDL_FPoint center = getMapViewCenter();
+    px -= center.x + mapOffsetX;
+    py -= center.y + mapOffsetY;
+    float x = (px / tileWidth + py / tileHeight);
+    float y = (py / tileHeight - px / tileWidth);
+    return { x, y };
+}
+void snapToNearestTile() {
+    if (gLevels.empty()) return;
+    Level& currentLevel = gLevels[gCurrentLevelIndex];
+    int mapSize = currentLevel.map.size();
+    float tileWidth, tileHeight;
+    updateTileSizes(currentLevel.zoomLevel, tileWidth, tileHeight);
+    SDL_FPoint center = getMapViewCenter();
+    SDL_FPoint cart = screenToCartesian(center.x, center.y, tileWidth, tileHeight, 0.0f, 0.0f);
+    int targetX = (int)std::round(cart.x);
+    int targetY = (int)std::round(cart.y);
+    targetX = std::max(0, std::min(mapSize - 1, targetX));
+    targetY = std::max(0, std::min(mapSize - 1, targetY));
+    SDL_FPoint targetScreenPos = cartesianToScreen((float)targetX, (float)targetY, tileWidth, tileHeight, 0.0f, 0.0f);
+    currentLevel.targetOffsetX = center.x - targetScreenPos.x;
+    currentLevel.targetOffsetY = center.y - targetScreenPos.y;
+    gIsSnapping = true;
+}
+void updateCamera() {
+    if (gLevels.empty() || !gIsSnapping) return;
+    Level& currentLevel = gLevels[gCurrentLevelIndex];
+    currentLevel.mapOffsetX += (currentLevel.targetOffsetX - currentLevel.mapOffsetX) * SNAP_SPEED;
+    currentLevel.mapOffsetY += (currentLevel.targetOffsetY - currentLevel.mapOffsetY) * SNAP_SPEED;
+    if (std::abs(currentLevel.targetOffsetX - currentLevel.mapOffsetX) < 1.0f && std::abs(currentLevel.targetOffsetY - currentLevel.mapOffsetY) < 1.0f) {
+        currentLevel.mapOffsetX = currentLevel.targetOffsetX;
+        currentLevel.mapOffsetY = currentLevel.targetOffsetY;
+        gIsSnapping = false;
+    }
+}
+
+// --- Asset Loading and Cleanup ---
+bool init() {
+    if (SDL_Init(SDL_INIT_VIDEO) < 0) return false;
+    gWindow = SDL_CreateWindow("Osiris Level Editor (SDL3)", INITIAL_SCREEN_WIDTH, INITIAL_SCREEN_HEIGHT, SDL_WINDOW_RESIZABLE);
+    if (gWindow == nullptr) return false;
+    gRenderer = SDL_CreateRenderer(gWindow, nullptr);
+    if (gRenderer == nullptr) return false;
+    SDL_SetRenderDrawBlendMode(gRenderer, SDL_BLENDMODE_BLEND);
+    return true;
+}
 void close() {
+    saveLevels();
     SDL_DestroyRenderer(gRenderer);
     SDL_DestroyWindow(gWindow);
     SDL_Quit();
 }
 
-/**
- * Custom helper for drawing filled quadrilaterals (diamonds) using SDL_RenderGeometry.
- * This function handles the conversion from SDL_Color (0-255) to SDL_FColor (0.0-1.0)
- * required by SDL_RenderGeometry, resolving the C2679 error.
- */
-void RenderFillPolygon(SDL_Renderer* renderer, const SDL_FPoint* vertices, int count) {
-    if (count != 4) return; // Only supports 4-sided diamond for this map
-
-    // Vertices: V0, V1, V2, V3
-    // Draw the quadrilateral as two triangles: (V0, V1, V2) and (V0, V2, V3)
-
-    SDL_Vertex render_vertices[4];
-    SDL_Color color;
-    // Get the current draw color (in 0-255 range)
-    SDL_GetRenderDrawColor(renderer, &color.r, &color.g, &color.b, &color.a);
-
-    for (int i = 0; i < count; ++i) {
-        render_vertices[i].position = vertices[i];
-
-        // Convert SDL_Color (uint8_t 0-255) to SDL_FColor (float 0.0-1.0)
-        render_vertices[i].color = {
-            (float)color.r / 255.0f,
-            (float)color.g / 255.0f,
-            (float)color.b / 255.0f,
-            (float)color.a / 255.0f
-        };
-
-        render_vertices[i].tex_coord = { 0.0f, 0.0f }; // No texture
-    }
-
-    // Indices for the two triangles
-    const int indices[6] = {
-        0, 1, 2, // Triangle 1 (Top, Right, Bottom)
-        0, 2, 3  // Triangle 2 (Top, Bottom, Left)
-    };
-
-    // Render the triangles
-    SDL_RenderGeometry(renderer, nullptr, render_vertices, count, indices, 6);
-}
-
-// --- Map Logic ---
-
-void generateMap() {
-    gMap.resize(MAP_SIZE, std::vector<TileData>(MAP_SIZE));
-    for (int x = 0; x < MAP_SIZE; ++x) {
-        for (int y = 0; y < MAP_SIZE; ++y) {
-            gMap[x][y].height = rand() % 3; // 0, 1, or 2
-            gMap[x][y].color = { 60, 180, 120, 255 }; // Teal/Green color
-        }
-    }
-}
-
-// Update tile size based on current zoom level
-void updateTileSizes() {
-    gTileWidth = BASE_TILE_WIDTH * gZoomLevel;
-    gTileHeight = gTileWidth / 2.0f;
-}
-
-// Convert cartesian (x, y) coordinates to screen (px, py) coordinates
-SDL_FPoint cartesianToScreen(float x, float y) {
-    float px = gMapOffsetX + (x - y) * gTileWidth / 2.0f;
-    float py = gMapOffsetY + (x + y) * gTileHeight / 2.0f;
-    return { px, py };
-}
-
-// Convert screen (px, py) coordinates to cartesian (x, y) coordinates (Inverse Projection)
-SDL_FPoint screenToCartesian(float px, float py) {
-    // Coords relative to map origin (0,0) before offset
-    float relativeX = px - gMapOffsetX;
-    float relativeY = py - gMapOffsetY;
-
-    // Inverse Isometric Projection:
-    float x = (relativeY / gTileHeight) + (relativeX / gTileWidth);
-    float y = (relativeY / gTileHeight) - (relativeX / gTileWidth);
-
-    return { x, y };
-}
-
-void drawTile(int x, int y, const TileData& data) {
-    SDL_FPoint screenPos = cartesianToScreen((float)x, (float)y);
+// --- Rendering Functions ---
+void drawTile(int x, int y, const TileData& data, float tileWidth, float tileHeight, float mapOffsetX, float mapOffsetY) {
+    SDL_FPoint screenPos = cartesianToScreen((float)x, (float)y, tileWidth, tileHeight, mapOffsetX, mapOffsetY);
     float px = screenPos.x;
     float py = screenPos.y;
     int h = data.height;
-
-    // Get current window size for culling optimization
     int windowW, windowH;
     SDL_GetWindowSize(gWindow, &windowW, &windowH);
-
-    // Optimization: Don't draw if completely off-screen
-    if (px + gTileWidth < 0 || px - gTileWidth > windowW ||
-        py + gTileHeight < 0 || py - gTileHeight > windowH) {
+    if (px + tileWidth < 0 || px - tileWidth > windowW || py + tileHeight < 0 || py - tileHeight - (10 * tileHeight) > windowH) {
         return;
     }
-
-    // Define the diamond shape vertices for the top surface
-    SDL_FPoint vertices[4];
-    float height_offset = h * gZoomLevel * 5.0f; // Height visual based on zoom
-
-    // 1. Top Point
-    vertices[0] = { px, py - height_offset };
-    // 2. Right Point
-    vertices[1] = { px + gTileWidth / 2.0f, py + gTileHeight / 2.0f - height_offset };
-    // 3. Bottom Point
-    vertices[2] = { px, py + gTileHeight - height_offset };
-    // 4. Left Point
-    vertices[3] = { px - gTileWidth / 2.0f, py + gTileHeight / 2.0f - height_offset };
-
-    // --- Draw the Top Surface (using the custom RenderFillPolygon) ---
-    SDL_Color baseColor = data.color;
-    SDL_SetRenderDrawColor(gRenderer, baseColor.r, baseColor.g, baseColor.b, 255);
+    float height_offset = h * (tileHeight * 0.5f);
+    SDL_FPoint vertices[4] = { {px, py - height_offset}, {px + tileWidth / 2.0f, py + tileHeight / 2.0f - height_offset}, {px, py + tileHeight - height_offset}, {px - tileWidth / 2.0f, py + tileHeight / 2.0f - height_offset} };
+    SDL_SetRenderDrawColor(gRenderer, data.color.r, data.color.g, data.color.b, 255);
     RenderFillPolygon(gRenderer, vertices, 4);
-
-    // --- Draw Border ---
+    SDL_SetRenderDrawColor(gRenderer, 30, 80, 50, 255);
     SDL_FPoint borderVertices[5] = { vertices[0], vertices[1], vertices[2], vertices[3], vertices[0] };
-
-    SDL_SetRenderDrawColor(gRenderer, 30, 80, 50, 255); // Darker border color
-    SDL_RenderLines(gRenderer, borderVertices, 5); // Draw the diamond border
-
-    // --- Draw the sides (optional but good for 3D feel) ---
+    SDL_RenderLines(gRenderer, borderVertices, 5);
     if (h > 0) {
-        SDL_SetRenderDrawColor(gRenderer, 80, 200, 140, 255); // Lighter side color
-        SDL_FPoint sideVerticesLeft[4];
-        // Left side vertices: V3(Top-Left), V2(Top-Bottom), V2_base, V3_base
-        sideVerticesLeft[0] = vertices[3]; // Top-Left
-        sideVerticesLeft[1] = vertices[2]; // Top-Bottom
-        sideVerticesLeft[2] = { px, py + gTileHeight + height_offset }; // Bottom-Bottom (at base height)
-        sideVerticesLeft[3] = { px - gTileWidth / 2.0f, py + gTileHeight / 2.0f + height_offset }; // Bottom-Left (at base height)
+        SDL_FPoint basePoint = { px, py + tileHeight };
+        SDL_FPoint baseLeft = { px - tileWidth / 2.0f, py + tileHeight / 2.0f };
+        SDL_FPoint baseRight = { px + tileWidth / 2.0f, py + tileHeight / 2.0f };
+        SDL_SetRenderDrawColor(gRenderer, 80, 160, 120, 255);
+        SDL_FPoint sideVerticesLeft[4] = { vertices[3], vertices[2], basePoint, baseLeft };
         RenderFillPolygon(gRenderer, sideVerticesLeft, 4);
-
-        SDL_SetRenderDrawColor(gRenderer, 80, 200, 140, 255); // Ensure color is set before drawing right side
-        // Right side vertices: V1(Top-Right), V2(Top-Bottom), V2_base, V1_base
-        SDL_FPoint sideVerticesRight[4];
-        sideVerticesRight[0] = vertices[1]; // Top-Right
-        sideVerticesRight[1] = vertices[2]; // Top-Bottom
-        sideVerticesRight[2] = { px, py + gTileHeight + height_offset }; // Bottom-Bottom (at base height)
-        sideVerticesRight[3] = { px + gTileWidth / 2.0f, py + gTileHeight / 2.0f + height_offset }; // Bottom-Right (at base height)
+        SDL_SetRenderDrawColor(gRenderer, 40, 120, 90, 255);
+        SDL_FPoint sideVerticesRight[4] = { vertices[1], vertices[2], basePoint, baseRight };
         RenderFillPolygon(gRenderer, sideVerticesRight, 4);
     }
 }
 
+void drawOverlay() {
+    int windowW, windowH;
+    SDL_GetWindowSize(gWindow, &windowW, &windowH);
+    if (!gLevels.empty()) {
+        std::string text = "Level: " + std::to_string(gCurrentLevelIndex + 1) + " / " + std::to_string(gLevels.size());
+        SDL_SetRenderDrawColor(gRenderer, 20, 20, 20, 180);
+        SDL_FRect bgRect = { 10, (float)windowH - 35, (float)text.length() * 8.0f + 10.0f, 25 };
+        SDL_RenderFillRect(gRenderer, &bgRect);
+        SDL_SetRenderDrawColor(gRenderer, 220, 220, 220, 255);
+        SDL_FRect textRect = { 15, (float)windowH - 30, (float)text.length() * 8.0f, 15 };
+        SDL_RenderFillRect(gRenderer, &textRect);
+    }
+    float uiWidth = 250;
+    float uiX = (float)windowW - uiWidth - 10;
+    SDL_SetRenderDrawColor(gRenderer, 20, 20, 20, 180);
+    SDL_FRect bgRect = { uiX, 10, uiWidth, 35 };
+    SDL_RenderFillRect(gRenderer, &bgRect);
+    SDL_SetRenderDrawColor(gRenderer, 220, 220, 220, 255);
+    SDL_FRect labelRect = { uiX + 10, 20, 80, 15 };
+    SDL_RenderFillRect(gRenderer, &labelRect);
+    std::string sizeText = std::to_string(gMapSize) + "x" + std::to_string(gMapSize);
+    SDL_FRect valueRect = { labelRect.x + labelRect.w + 5, 15, 60, 25 };
+    SDL_RenderFillRect(gRenderer, &valueRect);
+    SDL_SetRenderDrawColor(gRenderer, 200, 80, 80, 255);
+    SDL_FRect minusRect = { valueRect.x + valueRect.w + 10, 15, 25, 25 };
+    SDL_RenderFillRect(gRenderer, &minusRect);
+    SDL_SetRenderDrawColor(gRenderer, 80, 180, 80, 255);
+    SDL_FRect plusRect = { minusRect.x + minusRect.w + 5, 15, 25, 25 };
+    SDL_RenderFillRect(gRenderer, &plusRect);
+}
+
 void draw() {
-    // Clear screen (Dark blue background)
     SDL_SetRenderDrawColor(gRenderer, 31, 41, 55, 255);
     SDL_RenderClear(gRenderer);
-
-    updateTileSizes();
-
-    // Draw map tiles in order (back to front: top-left to bottom-right)
-    for (int x = 0; x < MAP_SIZE; ++x) {
-        for (int y = 0; y < MAP_SIZE; ++y) {
-            drawTile(x, y, gMap[x][y]);
+    if (!gLevels.empty()) {
+        Level& currentLevel = gLevels[gCurrentLevelIndex];
+        int mapSize = currentLevel.map.size();
+        float tileWidth, tileHeight;
+        updateTileSizes(currentLevel.zoomLevel, tileWidth, tileHeight);
+        for (int y = 0; y < mapSize; ++y) {
+            for (int x = 0; x < mapSize; ++x) {
+                drawTile(x, y, currentLevel.map[x][y], tileWidth, tileHeight, currentLevel.mapOffsetX, currentLevel.mapOffsetY);
+            }
         }
     }
-
-    // Present the renderer
+    drawOverlay();
     SDL_RenderPresent(gRenderer);
 }
 
-// --- Snapping Logic ---
-
-void snapToNearestTile() {
-    // 1. Get the screen center coordinates
-    int windowW, windowH;
-    // NOTE: SDL_GetWindowSize expects non-const int pointers.
-    SDL_GetWindowSize(gWindow, &windowW, &windowH);
-    float centerX = windowW / 2.0f;
-    float centerY = windowH / 2.0f;
-
-    // 2. Find the tile currently at the center of the screen (in floating-point Cartesian)
-    SDL_FPoint centerCart = screenToCartesian(centerX, centerY);
-
-    // 3. Determine the target tile (round to nearest integer)
-    int snappedX = std::max(0, std::min(MAP_SIZE - 1, (int)std::round(centerCart.x)));
-    int snappedY = std::max(0, std::min(MAP_SIZE - 1, (int)std::round(centerCart.y)));
-
-    // 4. Calculate the required new map offset to center that tile
-    // Calculate the screen position of the target tile if map offset was (0,0)
-    float targetOriginX = (snappedX - snappedY) * gTileWidth / 2.0f;
-    float targetOriginY = (snappedX + snappedY) * gTileHeight / 2.0f;
-
-    // New offset is the difference needed to move the target tile's screen position to the center
-    gTargetOffsetX = centerX - targetOriginX;
-    gTargetOffsetY = centerY - targetOriginY;
-
-    // Start snapping animation
-    gIsSnapping = true;
-}
-
-// Update the camera offset smoothly towards the target offset
-void updateCamera() {
-    if (!gIsSnapping) return;
-
-    // Linear interpolation (Lerp) for smooth movement
-    gMapOffsetX = gMapOffsetX + (gTargetOffsetX - gMapOffsetX) * SNAP_SPEED;
-    gMapOffsetY = gMapOffsetY + (gTargetOffsetY - gMapOffsetY) * SNAP_SPEED;
-
-    // Check if we are close enough to stop snapping
-    if (std::abs(gTargetOffsetX - gMapOffsetX) < 1.0f &&
-        std::abs(gTargetOffsetY - gMapOffsetY) < 1.0f) {
-
-        gMapOffsetX = gTargetOffsetX;
-        gMapOffsetY = gTargetOffsetY;
-        gIsSnapping = false;
-    }
-}
-
 // --- Event Handling ---
-/**
- * Centralized function to poll all events and set the quit flag if needed.
- */
 void handleEvents(bool& quit_flag) {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
-        switch (event.type) {
-        case SDL_EVENT_QUIT:
-            quit_flag = true; // Set the main loop's quit flag
-            break;
-        case SDL_EVENT_WINDOW_RESIZED:
-        case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
-            // Window size is handled locally in relevant functions (drawTile, snapToNearestTile)
-            break;
-
-        case SDL_EVENT_MOUSE_WHEEL: {
-            gIsSnapping = false; // Stop snapping on zoom
-
-            float zoomChange = (event.wheel.y > 0) ? 1.1f : 1.0f / 1.1f;
-            float oldZoom = gZoomLevel;
-            gZoomLevel = std::max(0.5f, std::min(3.0f, gZoomLevel * zoomChange));
-
-            if (oldZoom != gZoomLevel) {
-                // Get mouse position for zoom centering
-                float mouseX, mouseY;
-                SDL_GetMouseState(&mouseX, &mouseY);
-
-                // Calculate the cartesian point that should remain stationary
-                SDL_FPoint stationaryCart = screenToCartesian(mouseX, mouseY);
-
-                // Update tile sizes for new zoom level
-                updateTileSizes();
-
-                // Calculate where that stationary cartesian point should now be drawn
-                float newTargetX = (stationaryCart.x - stationaryCart.y) * gTileWidth / 2.0f;
-                float newTargetY = (stationaryCart.x + stationaryCart.y) * gTileHeight / 2.0f;
-
-                // Adjust offset to keep mouse position stable (zoom centered on cursor)
-                gMapOffsetX = mouseX - newTargetX;
-                gMapOffsetY = mouseY - newTargetY;
-            }
-            break;
+        if (event.type == SDL_EVENT_QUIT) {
+            quit_flag = true;
+            return;
         }
 
+        if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT) {
+            int windowW, windowH;
+            SDL_GetWindowSize(gWindow, &windowW, &windowH);
+            float uiWidth = 250;
+            float uiX = (float)windowW - uiWidth - 10;
+            SDL_FRect valueRect = { uiX + 10 + 80 + 5, 15, 60, 25 };
+            SDL_FRect minusRect = { valueRect.x + valueRect.w + 10, 15, 25, 25 };
+            SDL_FRect plusRect = { minusRect.x + minusRect.w + 5, 15, 25, 25 };
+
+            if (event.button.y >= 10 && event.button.y <= 45) {
+                bool sizeChanged = false;
+                if (event.button.x >= minusRect.x && event.button.x <= minusRect.x + minusRect.w) {
+                    if (gMapSize > 5) { gMapSize--; sizeChanged = true; }
+                }
+                else if (event.button.x >= plusRect.x && event.button.x <= plusRect.x + plusRect.w) {
+                    if (gMapSize < 100) { gMapSize++; sizeChanged = true; }
+                }
+                if (sizeChanged && !gLevels.empty()) {
+                    std::cout << "[Action] Grid size set to " << gMapSize << ". Resizing and resetting current level." << std::endl;
+                    gLevels[gCurrentLevelIndex].map = generateMap(gMapSize);
+                    snapToNearestTile();
+                    return;
+                }
+            }
+        }
+
+        if (gLevels.empty()) {
+            // FIX #2: Corrected the typo from "scancancode" to "scancode".
+            if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_N) {
+                addNewLevel();
+                snapToNearestTile();
+            }
+            continue;
+        }
+
+        Level& currentLevel = gLevels[gCurrentLevelIndex];
+        int mapSize = currentLevel.map.size();
+        switch (event.type) {
+        case SDL_EVENT_KEY_DOWN:
+            switch (event.key.scancode) {
+            case SDL_SCANCODE_S: saveLevels(); break;
+            case SDL_SCANCODE_RIGHT:
+                if (gCurrentLevelIndex < gLevels.size() - 1) {
+                    gCurrentLevelIndex++;
+                    gMapSize = gLevels[gCurrentLevelIndex].map.size();
+                    std::cout << "[Action] Switched to Level " << gCurrentLevelIndex + 1 << " (" << gMapSize << "x" << gMapSize << ")." << std::endl;
+                    snapToNearestTile();
+                }
+                break;
+            case SDL_SCANCODE_LEFT:
+                if (gCurrentLevelIndex > 0) {
+                    gCurrentLevelIndex--;
+                    gMapSize = gLevels[gCurrentLevelIndex].map.size();
+                    std::cout << "[Action] Switched to Level " << gCurrentLevelIndex + 1 << " (" << gMapSize << "x" << gMapSize << ")." << std::endl;
+                    snapToNearestTile();
+                }
+                break;
+            case SDL_SCANCODE_N: addNewLevel(); snapToNearestTile(); break;
+            case SDL_SCANCODE_DELETE: deleteCurrentLevel(); snapToNearestTile(); break;
+            case SDL_SCANCODE_R:
+                gLevels[gCurrentLevelIndex].map = generateMap(gLevels[gCurrentLevelIndex].map.size());
+                snapToNearestTile();
+                std::cout << "[Status] Level " << gCurrentLevelIndex + 1 << " has been reset to a flat grid." << std::endl;
+                break;
+            default: break;
+            }
+            break;
+        case SDL_EVENT_MOUSE_WHEEL: {
+            float mouseX, mouseY;
+            SDL_GetMouseState(&mouseX, &mouseY);
+            float preZoomTileWidth, preZoomTileHeight;
+            updateTileSizes(currentLevel.zoomLevel, preZoomTileWidth, preZoomTileHeight);
+            SDL_FPoint worldPos = screenToCartesian(mouseX, mouseY, preZoomTileWidth, preZoomTileHeight, currentLevel.mapOffsetX, currentLevel.mapOffsetY);
+            currentLevel.zoomLevel *= (event.wheel.y > 0 ? 1.1f : 0.9f);
+            currentLevel.zoomLevel = std::max(0.2f, std::min(3.0f, currentLevel.zoomLevel));
+            float postZoomTileWidth, postZoomTileHeight;
+            updateTileSizes(currentLevel.zoomLevel, postZoomTileWidth, postZoomTileHeight);
+            SDL_FPoint screenPosAfterZoom = cartesianToScreen(worldPos.x, worldPos.y, postZoomTileWidth, postZoomTileHeight, currentLevel.mapOffsetX, currentLevel.mapOffsetY);
+            currentLevel.mapOffsetX += mouseX - screenPosAfterZoom.x;
+            currentLevel.mapOffsetY += mouseY - screenPosAfterZoom.y;
+            currentLevel.targetOffsetX = currentLevel.mapOffsetX;
+            currentLevel.targetOffsetY = currentLevel.mapOffsetY;
+            gIsSnapping = false;
+            break;
+        }
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
             if (event.button.button == SDL_BUTTON_LEFT) {
                 gIsDragging = true;
-                gIsSnapping = false; // Stop snapping when drag starts
+                gIsSnapping = false;
                 gLastMouseX = event.button.x;
                 gLastMouseY = event.button.y;
             }
             break;
-
         case SDL_EVENT_MOUSE_BUTTON_UP:
             if (event.button.button == SDL_BUTTON_LEFT) {
-                if (gIsDragging) {
-                    gIsDragging = false;
-                    // Trigger snap only after a drag is complete
-                    snapToNearestTile();
+                bool wasDragging = gIsDragging;
+                gIsDragging = false;
+                if (!wasDragging) {
+                    float tileWidth, tileHeight;
+                    updateTileSizes(currentLevel.zoomLevel, tileWidth, tileHeight);
+                    SDL_FPoint cart = screenToCartesian((float)event.button.x, (float)event.button.y, tileWidth, tileHeight, currentLevel.mapOffsetX, currentLevel.mapOffsetY);
+                    int mapX = (int)std::round(cart.x);
+                    int mapY = (int)std::round(cart.y);
+                    if (mapX >= 0 && mapX < mapSize && mapY >= 0 && mapY < mapSize) {
+                        if (SDL_GetModState() & SDL_KMOD_LCTRL) {
+                            currentLevel.map[mapX][mapY].height = std::max(0, currentLevel.map[mapX][mapY].height - 1);
+                        }
+                        else {
+                            currentLevel.map[mapX][mapY].height = std::min(10, currentLevel.map[mapX][mapY].height + 1);
+                        }
+                    }
                 }
             }
             break;
-
         case SDL_EVENT_MOUSE_MOTION:
             if (gIsDragging) {
-                float currentX = event.motion.x;
-                float currentY = event.motion.y;
-
-                float deltaX = currentX - gLastMouseX;
-                float deltaY = currentY - gLastMouseY;
-
-                gMapOffsetX += deltaX;
-                gMapOffsetY += deltaY;
-
-                gLastMouseX = currentX;
-                gLastMouseY = currentY;
+                currentLevel.mapOffsetX += event.motion.x - gLastMouseX;
+                currentLevel.mapOffsetY += event.motion.y - gLastMouseY;
+                currentLevel.targetOffsetX = currentLevel.mapOffsetX;
+                currentLevel.targetOffsetY = currentLevel.mapOffsetY;
+                gLastMouseX = event.motion.x;
+                gLastMouseY = event.motion.y;
             }
             break;
         }
@@ -361,45 +477,16 @@ void handleEvents(bool& quit_flag) {
 }
 
 // --- Main Loop ---
-
 int main(int argc, char* args[]) {
-    if (!init()) {
-        std::cerr << "Failed to initialize!" << std::endl;
-        return 1;
-    }
-
-    generateMap();
-
-    // Initial centering of the map
-    updateTileSizes();
-    float initialCartX = (MAP_SIZE - 1) / 2.0f;
-    float initialCartY = (MAP_SIZE - 1) / 2.0f;
-    float targetOriginX = (initialCartX - initialCartY) * gTileWidth / 2.0f;
-    float targetOriginY = (initialCartX + initialCartY) * gTileHeight / 2.0f;
-
-    // Center the map view initially
-    gMapOffsetX = INITIAL_SCREEN_WIDTH / 2.0f - targetOriginX;
-    gMapOffsetY = INITIAL_SCREEN_HEIGHT / 2.0f - targetOriginY;
-
-
+    if (!init()) return 1;
+    if (!loadLevels()) addInitialLevels(1);
+    snapToNearestTile();
     bool quit = false;
-    Uint64 lastTime = SDL_GetTicks();
-
     while (!quit) {
-        Uint64 currentTime = SDL_GetTicks();
-        // float deltaTime = (currentTime - lastTime) / 1000.0f; // DeltaTime currently unused
-        lastTime = currentTime;
-
-        // --- Handle Events ---
-        handleEvents(quit); // Centralized event polling
-
-        // --- Update ---
-        updateCamera(); // Smoothly move camera if snapping
-
-        // --- Render ---
+        handleEvents(quit);
+        updateCamera();
         draw();
     }
-
     close();
     return 0;
 }
