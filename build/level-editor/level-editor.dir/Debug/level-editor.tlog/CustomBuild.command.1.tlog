@@ -1,0 +1,10 @@
+^C:\USERS\JIYA\DESKTOP\LEVEL-EDITOR\LEVEL-EDITOR\CMAKELISTS.TXT
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/JIYA/Desktop/level-editor -BC:/Users/JIYA/Desktop/level-editor/build --check-stamp-file C:/Users/JIYA/Desktop/level-editor/build/level-editor/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
