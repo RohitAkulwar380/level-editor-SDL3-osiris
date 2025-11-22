@@ -23,7 +23,6 @@ const int NUM_LAYERS = 5;
 
 const std::string SAVE_PATH = "assets\\levels\\";
 const std::string ASSET_PATH = "assets\\isometric tileset\\separated images\\";
-// [Collider System] New save file path
 const std::string COLLIDER_SAVE_FILE = SAVE_PATH + "tile_colliders.csv";
 
 const std::string LAYER_NAMES[NUM_LAYERS] = { "Terrain", "Player", "Furniture", "Enemy", "NPCs" };
@@ -32,7 +31,6 @@ const std::string LAYER_NAMES[NUM_LAYERS] = { "Terrain", "Player", "Furniture", 
 
 struct TileCollider {
     bool isSolid = false;
-    // Distances from the image edges (in pixels)
     int offsetLeft = 0;
     int offsetRight = 0;
     int offsetTop = 0;
@@ -50,7 +48,6 @@ struct TileType {
     TileCollider collider;
 };
 
-// Initial explicit types (will be expanded on load)
 std::vector<TileType> gTileTypes = {
     {"Grass", 0, nullptr},
     {"Dirt", 1, nullptr},
@@ -78,6 +75,7 @@ struct Level {
     float mapOffsetY = 0.0f;
     float targetOffsetX = 0.0f;
     float targetOffsetY = 0.0f;
+    std::string name = "";  // Custom level name (empty = use default)
 };
 
 // --- Global State ---
@@ -98,13 +96,15 @@ const float DRAG_THRESHOLD = 5.0f;
 bool gIsEditingGridSize = false;
 std::string gGridSizeInput = "25";
 
+bool gIsEditingLevelName = false;
+std::string gLevelNameInput = "";
+
 std::vector<SDL_Texture*> gTileTextures;
 
 float gTilePanelScroll = 0.0f;
 bool gIsDraggingScrollbar = false;
 float gScrollbarDragOffset = 0.0f;
 
-// [Collider System] Global State for Editor
 bool gShowColliderEditor = false;
 float gColliderZoom = 5.0f;
 
@@ -120,8 +120,8 @@ void snapToNearestTile();
 bool saveMetaCSV();
 void drawColliderEditor();
 void handleColliderInput(SDL_Event& e);
-void saveTileColliders(); // New Declaration
-void loadTileColliders(); // New Declaration
+void saveTileColliders();
+void loadTileColliders();
 
 // --- Utility Functions ---
 SDL_Texture* loadTexture(const std::string& path) {
@@ -139,7 +139,6 @@ SDL_Texture* loadTexture(const std::string& path) {
 }
 
 void loadTileTextures() {
-    // 1. Load named types first
     for (auto& tileType : gTileTypes) {
         std::string path = ASSET_PATH + "tile_" +
             std::string(3 - std::min(3, (int)std::to_string(tileType.tileID).length()), '0') +
@@ -150,8 +149,6 @@ void loadTileTextures() {
         }
     }
 
-    // 2. Dynamic Load: Scan for all tile_XXX.png files
-    // We loop until we find 20 missing files in a row, then we assume we are done.
     int i = 0;
     int consecutiveMissing = 0;
     const int GAP_LIMIT = 20;
@@ -162,17 +159,13 @@ void loadTileTextures() {
             std::to_string(i) + ".png";
         std::string path = ASSET_PATH + filename;
 
-        // Check if file exists silently before trying to load (to avoid error spam)
         std::ifstream f(path.c_str());
         if (f.good()) {
             f.close();
             SDL_Texture* tex = loadTexture(path);
             gTileTextures.push_back(tex);
-
-            // Reset missing counter because we found a valid file
             consecutiveMissing = 0;
 
-            // Ensure gTileTypes has an entry (Logic from your previous code)
             bool found = false;
             for (auto& t : gTileTypes) {
                 if (t.tileID == i) {
@@ -190,32 +183,26 @@ void loadTileTextures() {
             }
         }
         else {
-            // File doesn't exist at this ID
-            gTileTextures.push_back(nullptr); // Push null to keep ID indices aligned
+            gTileTextures.push_back(nullptr);
             consecutiveMissing++;
         }
-
         i++;
     }
 
-    // Cleanup the trailing nullptrs that were added while detecting the gap
-    // (We don't want the vector to be larger than the last actual asset)
     while (!gTileTextures.empty() && gTileTextures.back() == nullptr) {
         gTileTextures.pop_back();
     }
 
-    // Sort types
     std::sort(gTileTypes.begin(), gTileTypes.end(), [](const TileType& a, const TileType& b) {
         return a.tileID < b.tileID;
         });
 
-    std::cout << "[Status] Dynamically loaded " << gTileTextures.size() << " tile textures (scanned up to ID " << i << ")." << std::endl;
+    std::cout << "[Status] Dynamically loaded " << gTileTextures.size() << " tile textures." << std::endl;
 }
+
 void freeTileTextures() {
     for (auto* tex : gTileTextures) {
-        if (tex) {
-            SDL_DestroyTexture(tex);
-        }
+        if (tex) SDL_DestroyTexture(tex);
     }
     gTileTextures.clear();
     gTileTypes.clear();
@@ -258,13 +245,20 @@ Layer createLayer(int mapSize, const std::string& name, int layerIndex) {
     else {
         layer.map = generateMap(mapSize, 0);
     }
-
     return layer;
+}
+
+// Helper function to get level file prefix
+std::string getLevelPrefix(const Level& level, size_t index) {
+    if (!level.name.empty()) {
+        return level.name;
+    }
+    return "level_" + std::to_string(index + 1);
 }
 
 // --- Meta CSV Export ---
 bool saveMetaCSV() {
-    std::cout << "[Action] Generating meta.csv for all levels..." << std::endl;
+    std::cout << "[Action] Generating metadata for all levels..." << std::endl;
 
     for (size_t levelIdx = 0; levelIdx < gLevels.size(); ++levelIdx) {
         const auto& level = gLevels[levelIdx];
@@ -273,10 +267,10 @@ bool saveMetaCSV() {
 
         for (int layerIdx = 0; layerIdx < NUM_LAYERS; ++layerIdx) {
             const auto& layer = level.layers[layerIdx];
-            int mapSize = (int)layer.map.size();
+            int layerMapSize = (int)layer.map.size();
 
-            for (int x = 0; x < mapSize; ++x) {
-                for (int y = 0; y < mapSize; ++y) {
+            for (int x = 0; x < layerMapSize; ++x) {
+                for (int y = 0; y < layerMapSize; ++y) {
                     int tileID = layer.map[x][y].tileID;
                     if (layerIdx > 0 && tileID == 0) continue;
                     tileUsage[tileID].insert(layerIdx);
@@ -284,7 +278,8 @@ bool saveMetaCSV() {
             }
         }
 
-        std::string metaFilename = SAVE_PATH + "level_" + std::to_string(levelIdx + 1) + "_metadata.csv";
+        std::string prefix = getLevelPrefix(level, levelIdx);
+        std::string metaFilename = SAVE_PATH + prefix + "_metadata.csv";
         std::ofstream metaFile(metaFilename);
 
         if (!metaFile.is_open()) {
@@ -305,15 +300,14 @@ bool saveMetaCSV() {
             }
         }
         metaFile.close();
-        std::cout << "[Status] Created " << metaFilename << " with " << tileUsage.size() << " unique tiles." << std::endl;
+        std::cout << "[Status] Created " << metaFilename << std::endl;
     }
     return true;
 }
 
-// --- [Collider System] Save/Load Logic ---
-
+// --- Collider Save/Load ---
 void saveTileColliders() {
-    std::cout << "[Action] Saving tile colliders to " << COLLIDER_SAVE_FILE << "..." << std::endl;
+    std::cout << "[Action] Saving tile colliders..." << std::endl;
     std::ofstream file(COLLIDER_SAVE_FILE);
 
     if (!file.is_open()) {
@@ -321,12 +315,10 @@ void saveTileColliders() {
         return;
     }
 
-    // Header
     file << "tileID,isSolid,offsetLeft,offsetRight,offsetTop,offsetBottom\n";
 
     int count = 0;
     for (const auto& tile : gTileTypes) {
-        // ID + 1 for 1-based indexing in CSV
         file << (tile.tileID + 1) << ","
             << (tile.collider.isSolid ? "1" : "0") << ","
             << tile.collider.offsetLeft << ","
@@ -336,13 +328,13 @@ void saveTileColliders() {
         count++;
     }
 
-    file.flush(); // Force write to disk
+    file.flush();
     file.close();
     std::cout << "[Status] Saved collider data for " << count << " tiles." << std::endl;
 }
 
 void loadTileColliders() {
-    std::cout << "[Action] Loading tile colliders from " << COLLIDER_SAVE_FILE << "..." << std::endl;
+    std::cout << "[Action] Loading tile colliders..." << std::endl;
     std::ifstream file(COLLIDER_SAVE_FILE);
 
     if (!file.is_open()) {
@@ -351,32 +343,23 @@ void loadTileColliders() {
     }
 
     std::string line;
-    // Skip Header
     std::getline(file, line);
 
     int loadedCount = 0;
 
     while (std::getline(file, line)) {
-        // Skip empty lines
         if (line.empty()) continue;
 
-        // 1. Replace commas with spaces to make parsing standard and safe
         for (char& c : line) {
             if (c == ',') c = ' ';
         }
 
-        // 2. Use stringstream to extract numbers naturally
         std::stringstream ss(line);
         int rawID, isSolid, offL, offR, offT, offB;
 
-        // Attempt to read all 6 values
         if (ss >> rawID >> isSolid >> offL >> offR >> offT >> offB) {
-
-            // Convert 1-based CSV ID back to 0-based internal ID
             int internalID = rawID - 1;
 
-            // Find and update the tile
-            bool found = false;
             for (auto& tile : gTileTypes) {
                 if (tile.tileID == internalID) {
                     tile.collider.isSolid = (isSolid == 1);
@@ -384,23 +367,15 @@ void loadTileColliders() {
                     tile.collider.offsetRight = offR;
                     tile.collider.offsetTop = offT;
                     tile.collider.offsetBottom = offB;
-                    found = true;
                     loadedCount++;
                     break;
                 }
             }
-            if (!found) {
-                // Optional: Log if CSV has an ID that doesn't exist in the game assets
-                // std::cout << "Note: CSV contains ID " << rawID << " but asset not loaded." << std::endl;
-            }
-        }
-        else {
-            std::cerr << "[Warning] Skipping malformed line: " << line << std::endl;
         }
     }
 
     file.close();
-    std::cout << "[Status] Successfully loaded collider data for " << loadedCount << " tiles." << std::endl;
+    std::cout << "[Status] Loaded collider data for " << loadedCount << " tiles." << std::endl;
 }
 
 // --- Level State Management ---
@@ -412,6 +387,7 @@ void addInitialLevels(int count) {
                 level.layers[j] = createLayer(gMapSize, LAYER_NAMES[j], j);
             }
             level.activeLayer = 0;
+            level.name = "";
             gLevels.push_back(level);
         }
     }
@@ -423,9 +399,10 @@ void addNewLevel() {
         level.layers[j] = createLayer(gMapSize, LAYER_NAMES[j], j);
     }
     level.activeLayer = 0;
+    level.name = "";
     gLevels.push_back(level);
     gCurrentLevelIndex = gLevels.size() - 1;
-    std::cout << "[Status] New level created with " << NUM_LAYERS << " layers (" << gMapSize << "x" << gMapSize << ")." << std::endl;
+    std::cout << "[Status] New level created." << std::endl;
 }
 
 void deleteCurrentLevel() {
@@ -443,29 +420,28 @@ void deleteCurrentLevel() {
 
 // --- Serialization ---
 bool saveLevels() {
-    std::cout << "[Action] Saving all levels to separate layer files..." << std::endl;
-
-    // [Collider System] Save collider data along with level data
+    std::cout << "[Action] Saving all levels..." << std::endl;
     saveTileColliders();
 
     for (size_t i = 0; i < gLevels.size(); ++i) {
         const auto& level = gLevels[i];
         int mapSize = (int)level.layers[0].map.size();
+        std::string prefix = getLevelPrefix(level, i);
 
-        std::string metaFilename = SAVE_PATH + "level" + std::to_string(i + 1) + "_meta.csv";
+        // Save meta file with level name
+        std::string metaFilename = SAVE_PATH + prefix + "_meta.csv";
         std::ofstream metaFile(metaFilename);
         if (metaFile.is_open()) {
-            metaFile << "zoomLevel,mapOffsetX,mapOffsetY,mapSize,activeLayer\n";
+            metaFile << "zoomLevel,mapOffsetX,mapOffsetY,mapSize,activeLayer,levelName\n";
             metaFile << level.zoomLevel << "," << level.mapOffsetX << "," << level.mapOffsetY << ","
-                << mapSize << "," << level.activeLayer << "\n";
+                << mapSize << "," << level.activeLayer << "," << level.name << "\n";
             metaFile.close();
         }
 
         const char* layerSuffix[NUM_LAYERS] = { "terrain", "player", "furniture", "enemy", "npcs" };
 
         for (int layerIdx = 0; layerIdx < NUM_LAYERS; ++layerIdx) {
-            std::string filename = SAVE_PATH + "level_" + std::to_string(i + 1) + "_" +
-                layerSuffix[layerIdx] + ".csv";
+            std::string filename = SAVE_PATH + prefix + "_" + layerSuffix[layerIdx] + ".csv";
             std::ofstream file(filename);
 
             if (!file.is_open()) {
@@ -482,117 +458,108 @@ bool saveLevels() {
                 }
                 file << "\n";
             }
-
             file.close();
         }
     }
 
     saveMetaCSV();
-
-    size_t levelIndexToDelete = gLevels.size() + 1;
-    const char* suffixes[] = { "terrain", "player", "furniture", "enemy", "npcs", "metadata", "meta" };
-    while (true) {
-        bool foundAny = false;
-        for (const char* suffix : suffixes) {
-            std::string filename = SAVE_PATH + "level_" + std::to_string(levelIndexToDelete) + "_" + suffix + ".csv";
-            if (std::ifstream(filename).good()) {
-                if (std::remove(filename.c_str()) == 0) {
-                    std::cout << "[Status] Cleaned up orphan file: " << filename << std::endl;
-                }
-                foundAny = true;
-            }
-        }
-        if (!foundAny) break;
-        levelIndexToDelete++;
-    }
-
     std::cout << "[Status] Save successful." << std::endl;
     return true;
 }
 
 bool loadLevels() {
-    std::cout << "[Action] Searching for level files in " << SAVE_PATH << "..." << std::endl;
+    std::cout << "[Action] Searching for level files..." << std::endl;
     gLevels.clear();
     int levelIndex = 1;
 
     while (true) {
+        // Try default naming first
         std::string metaFilename = SAVE_PATH + "level_" + std::to_string(levelIndex) + "_metadata.csv";
         std::ifstream metaFile(metaFilename);
 
-        if (!metaFile.is_open()) {
-            break;
-        }
+        if (!metaFile.is_open()) break;
 
         try {
             Level level;
             std::string line, value;
 
-            if (std::getline(metaFile, line)) {
-                if (line.find("zoomLevel") != std::string::npos) {
-                    std::getline(metaFile, line);
+            // Try to load the _meta.csv for camera/name info
+            std::string levelMetaFile = SAVE_PATH + "level_" + std::to_string(levelIndex) + "_meta.csv";
+            std::ifstream lmf(levelMetaFile);
+            if (lmf.is_open()) {
+                std::getline(lmf, line); // Skip header
+                if (std::getline(lmf, line)) {
+                    std::stringstream ss(line);
+                    if (std::getline(ss, value, ',')) level.zoomLevel = std::stof(value);
+                    if (std::getline(ss, value, ',')) level.mapOffsetX = std::stof(value);
+                    if (std::getline(ss, value, ',')) level.mapOffsetY = std::stof(value);
+                    int mapSize = gMapSize;
+                    if (std::getline(ss, value, ',')) mapSize = std::stoi(value);
+                    if (std::getline(ss, value, ',')) level.activeLayer = std::stoi(value);
+                    if (std::getline(ss, value, ',')) level.name = value;
+                    gMapSize = mapSize;
                 }
-
-                std::stringstream ss(line);
-                if (std::getline(ss, value, ',')) level.zoomLevel = std::stof(value);
-                if (std::getline(ss, value, ',')) level.mapOffsetX = std::stof(value);
-                if (std::getline(ss, value, ',')) level.mapOffsetY = std::stof(value);
-
-                int mapSize = gMapSize;
-                if (std::getline(ss, value, ',')) mapSize = std::stoi(value);
-
-                if (std::getline(ss, value, ',')) level.activeLayer = std::stoi(value);
-
-                level.targetOffsetX = level.mapOffsetX;
-                level.targetOffsetY = level.mapOffsetY;
-
-                const char* layerSuffix[NUM_LAYERS] = { "terrain", "player", "furniture", "enemy", "npcs" };
-
-                for (int layerIdx = 0; layerIdx < NUM_LAYERS; ++layerIdx) {
-                    std::string layerFilename = SAVE_PATH + "level_" + std::to_string(levelIndex) + "_" +
-                        layerSuffix[layerIdx] + ".csv";
-                    std::ifstream layerFile(layerFilename);
-
-                    Layer layer;
-                    layer.name = LAYER_NAMES[layerIdx];
-                    layer.visible = true;
-                    layer.map = generateMap(mapSize, 0);
-
-                    if (layerFile.is_open()) {
-                        for (int y = 0; y < mapSize; ++y) {
-                            if (!std::getline(layerFile, line)) break;
-                            std::stringstream rowStream(line);
-                            for (int x = 0; x < mapSize; ++x) {
-                                if (!std::getline(rowStream, value, ',')) break;
-                                layer.map[x][y].tileID = std::stoi(value);
-                            }
-                        }
-                        layerFile.close();
-                    }
-                    else {
-                        std::cerr << "Warning: Could not load " << layerFilename << std::endl;
-                    }
-
-                    level.layers[layerIdx] = layer;
-                }
-
-                gLevels.push_back(level);
+                lmf.close();
             }
+
+            level.targetOffsetX = level.mapOffsetX;
+            level.targetOffsetY = level.mapOffsetY;
+
+            // Now read tile usage from metadata to get mapSize
+            if (std::getline(metaFile, line)) {
+                // Skip header, read first data line for grid size
+                if (std::getline(metaFile, line)) {
+                    std::stringstream ss(line);
+                    std::string temp;
+                    for (int skip = 0; skip < 4; skip++) std::getline(ss, temp, ',');
+                    if (std::getline(ss, temp, ',')) {
+                        int mapSize = std::stoi(temp);
+                        gMapSize = mapSize;
+                    }
+                }
+            }
+            metaFile.close();
+
+            const char* layerSuffix[NUM_LAYERS] = { "terrain", "player", "furniture", "enemy", "npcs" };
+
+            for (int layerIdx = 0; layerIdx < NUM_LAYERS; ++layerIdx) {
+                std::string layerFilename = SAVE_PATH + "level_" + std::to_string(levelIndex) + "_" +
+                    layerSuffix[layerIdx] + ".csv";
+                std::ifstream layerFile(layerFilename);
+
+                Layer layer;
+                layer.name = LAYER_NAMES[layerIdx];
+                layer.visible = true;
+                layer.map = generateMap(gMapSize, 0);
+
+                if (layerFile.is_open()) {
+                    for (int y = 0; y < gMapSize; ++y) {
+                        if (!std::getline(layerFile, line)) break;
+                        std::stringstream rowStream(line);
+                        for (int x = 0; x < gMapSize; ++x) {
+                            if (!std::getline(rowStream, value, ',')) break;
+                            layer.map[x][y].tileID = std::stoi(value);
+                        }
+                    }
+                    layerFile.close();
+                }
+
+                level.layers[layerIdx] = layer;
+            }
+
+            gLevels.push_back(level);
         }
         catch (const std::exception& e) {
             std::cerr << "Error loading level " << levelIndex << ": " << e.what() << std::endl;
         }
 
-        metaFile.close();
         levelIndex++;
     }
 
     if (!gLevels.empty()) {
         gCurrentLevelIndex = 0;
-        if (!gLevels[0].layers[0].map.empty()) {
-            gMapSize = (int)gLevels[0].layers[0].map.size();
-            gGridSizeInput = std::to_string(gMapSize);
-        }
-        std::cout << "[Status] " << gLevels.size() << " level(s) successfully retrieved." << std::endl;
+        gGridSizeInput = std::to_string(gMapSize);
+        std::cout << "[Status] " << gLevels.size() << " level(s) loaded." << std::endl;
         return true;
     }
 
@@ -670,43 +637,38 @@ bool init() {
     }
 
     if (!TTF_Init()) {
-        std::cerr << "SDL_ttf could not initialize! TTF_Error: " << SDL_GetError() << std::endl;
+        std::cerr << "SDL_ttf could not initialize!" << std::endl;
         return false;
     }
 
     gWindow = SDL_CreateWindow("Osiris Level Editor (SDL3)", INITIAL_SCREEN_WIDTH, INITIAL_SCREEN_HEIGHT, SDL_WINDOW_RESIZABLE);
-    if (gWindow == nullptr) {
+    if (!gWindow) {
         std::cerr << "Window creation failed: " << SDL_GetError() << std::endl;
         return false;
     }
 
     gRenderer = SDL_CreateRenderer(gWindow, nullptr);
-    if (gRenderer == nullptr) {
+    if (!gRenderer) {
         std::cerr << "Renderer creation failed: " << SDL_GetError() << std::endl;
         return false;
     }
 
-    gFont = TTF_OpenFont("D:/Projects/iso-game/ref-code/os-level-editor/level-editor-SDL3-osiris/assets/font/font.ttf", 16);
-    if (gFont == nullptr) {
-        std::cerr << "Failed to load font! TTF_Error: " << SDL_GetError() << std::endl;
+    gFont = TTF_OpenFont("assets/font/font.ttf", 16);
+    if (!gFont) {
+        std::cerr << "Failed to load font!" << std::endl;
     }
 
     SDL_SetRenderDrawBlendMode(gRenderer, SDL_BLENDMODE_BLEND);
-
     loadTileTextures();
-
-    // [Collider System] Load collider data after textures are prepped
     loadTileColliders();
 
     return true;
 }
 
 void close() {
-    saveLevels(); // This also saves colliders now
+    saveLevels();
     freeTileTextures();
-    if (gFont) {
-        TTF_CloseFont(gFont);
-    }
+    if (gFont) TTF_CloseFont(gFont);
     SDL_DestroyRenderer(gRenderer);
     SDL_DestroyWindow(gWindow);
     TTF_Quit();
@@ -714,11 +676,9 @@ void close() {
 }
 
 // --- Rendering Functions ---
-
 void drawColliderEditor() {
     if (!gShowColliderEditor) return;
 
-    // 1. Dim Background (Modal overlay)
     int windowW, windowH;
     SDL_GetWindowSize(gWindow, &windowW, &windowH);
 
@@ -727,14 +687,12 @@ void drawColliderEditor() {
     SDL_FRect fullscreen = { 0, 0, (float)windowW, (float)windowH };
     SDL_RenderFillRect(gRenderer, &fullscreen);
 
-    if (gSelectedTileType < 0 || gSelectedTileType >= gTileTypes.size()) return;
+    if (gSelectedTileType < 0 || gSelectedTileType >= (int)gTileTypes.size()) return;
     TileType& tile = gTileTypes[gSelectedTileType];
 
-    // 2. Draw Title and Instructions
     renderText("COLLIDER EDITOR - Tile " + std::to_string(tile.tileID), (float)windowW / 2 - 100, 50, { 255, 255, 255, 255 });
     renderText("Press ESC to Close", (float)windowW / 2 - 60, 80, { 180, 180, 180, 255 });
 
-    // 3. Draw Solid Toggle Button
     SDL_FRect solidBtn = { (float)windowW / 2 - 100, (float)windowH / 2 - 250, 200, 30 };
     SDL_SetRenderDrawColor(gRenderer, 60, 60, 60, 255);
     SDL_RenderFillRect(gRenderer, &solidBtn);
@@ -747,7 +705,6 @@ void drawColliderEditor() {
 
     if (!tile.texture) return;
 
-    // 4. Draw Zoomed Preview Image
     float texW, texH;
     SDL_GetTextureSize(tile.texture, &texW, &texH);
 
@@ -756,51 +713,40 @@ void drawColliderEditor() {
     float previewX = (windowW - previewW) / 2;
     float previewY = (windowH - previewH) / 2;
 
-    // Draw Image Background (to see transparency)
     SDL_SetRenderDrawColor(gRenderer, 30, 30, 30, 255);
-    SDL_FRect bgRect = { previewX, previewY, previewW, previewH };
-    SDL_RenderFillRect(gRenderer, &bgRect);
+    SDL_FRect bgRect2 = { previewX, previewY, previewW, previewH };
+    SDL_RenderFillRect(gRenderer, &bgRect2);
 
     SDL_FRect dstRect = { previewX, previewY, previewW, previewH };
     SDL_RenderTexture(gRenderer, tile.texture, nullptr, &dstRect);
     SDL_SetRenderDrawColor(gRenderer, 255, 255, 255, 255);
-    SDL_RenderRect(gRenderer, &dstRect); // Border around image
+    SDL_RenderRect(gRenderer, &dstRect);
 
-    // 5. Draw Grid Lines
     SDL_SetRenderDrawColor(gRenderer, 100, 100, 100, 80);
-    for (int i = 0; i <= texW; i++) {
+    for (int i = 0; i <= (int)texW; i++) {
         float x = previewX + i * gColliderZoom;
         SDL_RenderLine(gRenderer, x, previewY, x, previewY + previewH);
     }
-    for (int i = 0; i <= texH; i++) {
+    for (int i = 0; i <= (int)texH; i++) {
         float y = previewY + i * gColliderZoom;
         SDL_RenderLine(gRenderer, previewX, y, previewX + previewW, y);
     }
 
-    // 6. Draw Collider Box (if solid)
     if (tile.collider.isSolid) {
         float boxX = previewX + (tile.collider.offsetLeft * gColliderZoom);
         float boxY = previewY + (tile.collider.offsetTop * gColliderZoom);
         float boxW = previewW - ((tile.collider.offsetLeft + tile.collider.offsetRight) * gColliderZoom);
         float boxH = previewH - ((tile.collider.offsetTop + tile.collider.offsetBottom) * gColliderZoom);
 
-        // Fill area (semi-transparent red)
         SDL_SetRenderDrawColor(gRenderer, 255, 0, 0, 80);
         SDL_FRect colRect = { boxX, boxY, boxW, boxH };
         SDL_RenderFillRect(gRenderer, &colRect);
-
-        // Outline (Solid red)
         SDL_SetRenderDrawColor(gRenderer, 255, 0, 0, 255);
         SDL_RenderRect(gRenderer, &colRect);
 
-        // 7. Draw Offset Values (Text)
-        // Top
         renderText("T: " + std::to_string(tile.collider.offsetTop), (float)windowW / 2, previewY - 25, { 255, 255, 0, 255 });
-        // Bottom
         renderText("B: " + std::to_string(tile.collider.offsetBottom), (float)windowW / 2, previewY + previewH + 10, { 255, 255, 0, 255 });
-        // Left
         renderText("L: " + std::to_string(tile.collider.offsetLeft), previewX - 50, (float)windowH / 2, { 255, 255, 0, 255 });
-        // Right
         renderText("R: " + std::to_string(tile.collider.offsetRight), previewX + previewW + 10, (float)windowH / 2, { 255, 255, 0, 255 });
     }
 }
@@ -814,7 +760,6 @@ void drawTilePanel() {
     SDL_SetRenderDrawColor(gRenderer, 40, 40, 40, 255);
     SDL_FRect panelBg = { panelX, 0, (float)TILE_PANEL_WIDTH, (float)windowH };
     SDL_RenderFillRect(gRenderer, &panelBg);
-
     SDL_SetRenderDrawColor(gRenderer, 80, 80, 80, 255);
     SDL_RenderRect(gRenderer, &panelBg);
 
@@ -844,7 +789,6 @@ void drawTilePanel() {
             SDL_SetRenderDrawColor(gRenderer, 100, 150, 255, 255);
             SDL_FRect highlightRect = { itemX - 5, itemY - 3, (float)TILE_PANEL_WIDTH - 20, tileSize + 6 };
             SDL_RenderFillRect(gRenderer, &highlightRect);
-
             renderText("[C] Edit Collider", itemX + 65, itemY + 42, { 255, 255, 0, 255 });
         }
 
@@ -853,19 +797,12 @@ void drawTilePanel() {
             float centerX = itemX + 25;
             float centerY = itemY + tileSize / 2;
 
-            SDL_FRect destRect = {
-                centerX - previewSize / 2,
-                centerY - previewSize / 2,
-                previewSize,
-                previewSize
-            };
-
+            SDL_FRect destRect = { centerX - previewSize / 2, centerY - previewSize / 2, previewSize, previewSize };
             SDL_RenderTexture(gRenderer, gTileTextures[i], nullptr, &destRect);
         }
 
         SDL_Color textColor = { 220, 220, 220, 255 };
-        std::string tileLabel = "Tile " + std::to_string(i);
-        renderText(tileLabel, itemX + 65, itemY + 22, textColor);
+        renderText("Tile " + std::to_string(i), itemX + 65, itemY + 22, textColor);
     }
 
     SDL_SetRenderClipRect(gRenderer, nullptr);
@@ -897,9 +834,7 @@ void drawTile(int x, int y, const TileData& data, float tileWidth, float tileHei
 
     int windowW, windowH;
     SDL_GetWindowSize(gWindow, &windowW, &windowH);
-    if (px + tileWidth < 0 || px - tileWidth > windowW || py + tileHeight < 0 || py - tileHeight * 3 > windowH) {
-        return;
-    }
+    if (px + tileWidth < 0 || px - tileWidth > windowW || py + tileHeight < 0 || py - tileHeight * 3 > windowH) return;
 
     SDL_Texture* tileTexture = nullptr;
     if (data.tileID >= 0 && data.tileID < (int)gTileTextures.size()) {
@@ -908,7 +843,6 @@ void drawTile(int x, int y, const TileData& data, float tileWidth, float tileHei
 
     if (tileTexture) {
         SDL_SetTextureAlphaMod(tileTexture, alpha);
-
         float texW, texH;
         SDL_GetTextureSize(tileTexture, &texW, &texH);
 
@@ -916,13 +850,7 @@ void drawTile(int x, int y, const TileData& data, float tileWidth, float tileHei
         float scaledWidth = texW * scale;
         float scaledHeight = texH * scale;
 
-        SDL_FRect destRect = {
-            px - scaledWidth / 2.0f,
-            py - scaledHeight / 2.0f,
-            scaledWidth,
-            scaledHeight
-        };
-
+        SDL_FRect destRect = { px - scaledWidth / 2.0f, py - scaledHeight / 2.0f, scaledWidth, scaledHeight };
         SDL_RenderTexture(gRenderer, tileTexture, nullptr, &destRect);
         SDL_SetTextureAlphaMod(tileTexture, 255);
     }
@@ -939,25 +867,16 @@ void drawMap() {
 
     for (int layerIdx = 0; layerIdx < NUM_LAYERS; ++layerIdx) {
         const Layer& layer = currentLevel.layers[layerIdx];
-
-        if (!layer.visible) continue;
-        if (layer.map.empty()) continue;
+        if (!layer.visible || layer.map.empty()) continue;
 
         int alpha = (layerIdx == currentLevel.activeLayer) ? 255 : 128;
 
         for (int y = 0; y < mapSize; ++y) {
             for (int x = 0; x < mapSize; ++x) {
-                if (x >= (int)layer.map.size()) continue;
-                if (y >= (int)layer.map[x].size()) continue;
-
+                if (x >= (int)layer.map.size() || y >= (int)layer.map[x].size()) continue;
                 const TileData& data = layer.map[x][y];
-
-                if (layerIdx > 0 && data.tileID == 0) {
-                    continue;
-                }
-
-                drawTile(x, y, data, tileWidth, tileHeight,
-                    currentLevel.mapOffsetX, currentLevel.mapOffsetY, alpha);
+                if (layerIdx > 0 && data.tileID == 0) continue;
+                drawTile(x, y, data, tileWidth, tileHeight, currentLevel.mapOffsetX, currentLevel.mapOffsetY, alpha);
             }
         }
     }
@@ -968,16 +887,58 @@ void drawOverlay() {
     SDL_GetWindowSize(gWindow, &windowW, &windowH);
     SDL_Color textColor = { 220, 220, 220, 255 };
 
+    // === Level Name Input (Top Left) ===
+    SDL_SetRenderDrawColor(gRenderer, 20, 20, 20, 180);
+    SDL_FRect nameBgRect = { 10, 10, 260, 35 };
+    SDL_RenderFillRect(gRenderer, &nameBgRect);
+    renderText("Level Name:", 20, 18, textColor);
+
+    float nameLabelW = 95;
+    SDL_FRect nameValueRect = { 20 + nameLabelW + 5, 15, 145, 25 };
+
+    if (gIsEditingLevelName) {
+        SDL_SetRenderDrawColor(gRenderer, 100, 150, 255, 255);
+    }
+    else {
+        SDL_SetRenderDrawColor(gRenderer, 60, 60, 60, 255);
+    }
+    SDL_RenderFillRect(gRenderer, &nameValueRect);
+    SDL_SetRenderDrawColor(gRenderer, 240, 240, 240, 255);
+    SDL_RenderRect(gRenderer, &nameValueRect);
+
+    std::string displayName;
+    if (gIsEditingLevelName) {
+        displayName = gLevelNameInput;
+    }
+    else if (!gLevels.empty() && !gLevels[gCurrentLevelIndex].name.empty()) {
+        displayName = gLevels[gCurrentLevelIndex].name;
+    }
+    else {
+        displayName = "(default)";
+    }
+    renderText(displayName, nameValueRect.x + 5, nameValueRect.y + 5, textColor);
+
+    if (gIsEditingLevelName && SDL_GetTicks() % 1000 < 500) {
+        int cursorW = 0, cursorH = 0;
+        if (gFont && !gLevelNameInput.empty()) {
+            TTF_GetStringSizeWrapped(gFont, gLevelNameInput.c_str(), 0, 0, &cursorW, &cursorH);
+        }
+        else {
+            cursorW = (int)gLevelNameInput.length() * 8;
+        }
+        float cursorX = nameValueRect.x + 5 + (float)cursorW;
+        SDL_SetRenderDrawColor(gRenderer, 255, 255, 255, 255);
+        SDL_RenderLine(gRenderer, cursorX, nameValueRect.y + 5, cursorX, nameValueRect.y + 20);
+    }
+
+    // === Level/Layer Info (Bottom Left) ===
     if (!gLevels.empty()) {
         Level& currentLevel = gLevels[gCurrentLevelIndex];
 
         std::string levelText = "Level: " + std::to_string(gCurrentLevelIndex + 1) + " / " + std::to_string(gLevels.size());
         int textW = 0, textH = 0;
-        if (gFont && TTF_GetStringSizeWrapped(gFont, levelText.c_str(), 0, 0, &textW, &textH)) {
-        }
-        else {
-            textW = (int)levelText.length() * 8;
-        }
+        if (gFont) TTF_GetStringSizeWrapped(gFont, levelText.c_str(), 0, 0, &textW, &textH);
+        else textW = (int)levelText.length() * 8;
 
         SDL_SetRenderDrawColor(gRenderer, 20, 20, 20, 180);
         SDL_FRect bgRect = { 10, (float)windowH - 35, (float)textW + 10.0f, 25 };
@@ -985,30 +946,22 @@ void drawOverlay() {
         renderText(levelText, 15, (float)windowH - 32, textColor);
 
         std::string layerText = "Layer: " + currentLevel.layers[currentLevel.activeLayer].name +
-            " (" + std::to_string(currentLevel.activeLayer + 1) + "/" + std::to_string(NUM_LAYERS) + ")";
-
-        layerText += " | Visible: ";
+            " (" + std::to_string(currentLevel.activeLayer + 1) + "/" + std::to_string(NUM_LAYERS) + ") | Visible: ";
         for (int i = 0; i < NUM_LAYERS; ++i) {
-            if (currentLevel.layers[i].visible) {
-                layerText += LAYER_NAMES[i][0];
-            }
+            if (currentLevel.layers[i].visible) layerText += LAYER_NAMES[i][0];
         }
 
         int layerTextW = 0;
-        if (gFont && TTF_GetStringSizeWrapped(gFont, layerText.c_str(), 0, 0, &layerTextW, &textH)) {
-        }
-        else {
-            layerTextW = (int)layerText.length() * 8;
-        }
+        if (gFont) TTF_GetStringSizeWrapped(gFont, layerText.c_str(), 0, 0, &layerTextW, &textH);
+        else layerTextW = (int)layerText.length() * 8;
 
         SDL_SetRenderDrawColor(gRenderer, 20, 20, 20, 180);
         SDL_FRect layerBgRect = { 10, (float)windowH - 65, (float)layerTextW + 10.0f, 25 };
         SDL_RenderFillRect(gRenderer, &layerBgRect);
-
-        SDL_Color layerColor = { 100, 200, 255, 255 };
-        renderText(layerText, 15, (float)windowH - 62, layerColor);
+        renderText(layerText, 15, (float)windowH - 62, { 100, 200, 255, 255 });
     }
 
+    // === Grid Size Input (Top Right) ===
     float uiWidth = 200;
     float uiX = (float)windowW - uiWidth - 10 - TILE_PANEL_WIDTH;
     SDL_SetRenderDrawColor(gRenderer, 20, 20, 20, 180);
@@ -1016,13 +969,7 @@ void drawOverlay() {
     SDL_RenderFillRect(gRenderer, &bgRect2);
     renderText("Grid Size:", uiX + 10, 18, textColor);
 
-    int labelW = 0, labelH = 0;
-    if (gFont && TTF_GetStringSizeWrapped(gFont, "Grid Size:", 0, 0, &labelW, &labelH)) {
-    }
-    else {
-        labelW = 80;
-    }
-
+    int labelW = 80;
     SDL_FRect valueRect = { uiX + 10 + (float)labelW + 5, 15, 60, 25 };
 
     if (gIsEditingGridSize) {
@@ -1042,11 +989,8 @@ void drawOverlay() {
     if (gIsEditingGridSize && SDL_GetTicks() % 1000 < 500) {
         std::string cursorText = gGridSizeInput.empty() ? "" : gGridSizeInput;
         int cursorW = 0, cursorH = 0;
-        if (gFont && !cursorText.empty() && TTF_GetStringSizeWrapped(gFont, cursorText.c_str(), 0, 0, &cursorW, &cursorH)) {
-        }
-        else {
-            cursorW = (int)cursorText.length() * 8;
-        }
+        if (gFont && !cursorText.empty()) TTF_GetStringSizeWrapped(gFont, cursorText.c_str(), 0, 0, &cursorW, &cursorH);
+        else cursorW = (int)cursorText.length() * 8;
         float cursorX = valueRect.x + 5 + (float)cursorW;
         SDL_SetRenderDrawColor(gRenderer, 255, 255, 255, 255);
         SDL_RenderLine(gRenderer, cursorX, valueRect.y + 5, cursorX, valueRect.y + 20);
@@ -1056,83 +1000,66 @@ void drawOverlay() {
 void draw() {
     SDL_SetRenderDrawColor(gRenderer, 30, 30, 30, 255);
     SDL_RenderClear(gRenderer);
-
     drawMap();
     drawTilePanel();
     drawOverlay();
     drawColliderEditor();
-
     SDL_RenderPresent(gRenderer);
 }
 
 // --- Input Handling ---
-
 void handleColliderInput(SDL_Event& e) {
     if (!gShowColliderEditor) return;
-
-    if (gSelectedTileType < 0 || gSelectedTileType >= gTileTypes.size()) return;
+    if (gSelectedTileType < 0 || gSelectedTileType >= (int)gTileTypes.size()) return;
     TileType& tile = gTileTypes[gSelectedTileType];
 
     if (e.type == SDL_EVENT_KEY_DOWN) {
-        if (e.key.key == SDLK_ESCAPE) {
-            gShowColliderEditor = false;
-        }
+        if (e.key.key == SDLK_ESCAPE) gShowColliderEditor = false;
     }
-    else if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
-        if (e.button.button == SDL_BUTTON_LEFT) {
-            int windowW, windowH;
-            SDL_GetWindowSize(gWindow, &windowW, &windowH);
+    else if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == SDL_BUTTON_LEFT) {
+        int windowW, windowH;
+        SDL_GetWindowSize(gWindow, &windowW, &windowH);
 
-            // 1. Check UI Buttons (Solid Toggle)
-            SDL_FRect solidToggle = { (float)windowW / 2 - 100, (float)windowH / 2 - 250, 200, 30 };
-            if (e.button.x >= solidToggle.x && e.button.x <= solidToggle.x + solidToggle.w &&
-                e.button.y >= solidToggle.y && e.button.y <= solidToggle.y + solidToggle.h) {
-                tile.collider.isSolid = !tile.collider.isSolid;
-                return;
+        SDL_FRect solidToggle = { (float)windowW / 2 - 100, (float)windowH / 2 - 250, 200, 30 };
+        if (e.button.x >= solidToggle.x && e.button.x <= solidToggle.x + solidToggle.w &&
+            e.button.y >= solidToggle.y && e.button.y <= solidToggle.y + solidToggle.h) {
+            tile.collider.isSolid = !tile.collider.isSolid;
+            return;
+        }
+
+        if (!tile.collider.isSolid || !tile.texture) return;
+
+        float texW, texH;
+        SDL_GetTextureSize(tile.texture, &texW, &texH);
+        float previewW = texW * gColliderZoom;
+        float previewH = texH * gColliderZoom;
+        float previewX = (windowW - previewW) / 2;
+        float previewY = (windowH - previewH) / 2;
+
+        if (e.button.x >= previewX && e.button.x <= previewX + previewW &&
+            e.button.y >= previewY && e.button.y <= previewY + previewH) {
+
+            float localX = (e.button.x - previewX) / gColliderZoom;
+            float localY = (e.button.y - previewY) / gColliderZoom;
+
+            float distToLeft = localX, distToRight = texW - localX;
+            float distToTop = localY, distToBottom = texH - localY;
+            float minH = std::min(distToLeft, distToRight);
+            float minV = std::min(distToTop, distToBottom);
+
+            if (minH < minV) {
+                if (distToLeft < distToRight) tile.collider.offsetLeft = (int)localX;
+                else tile.collider.offsetRight = (int)(texW - localX);
+            }
+            else {
+                if (distToTop < distToBottom) tile.collider.offsetTop = (int)localY;
+                else tile.collider.offsetBottom = (int)(texH - localY);
             }
 
-            // 2. Handle Image Clicking
-            if (!tile.collider.isSolid) return;
-
-            // Calculate Image Preview Bounds
-            float texW, texH;
-            SDL_GetTextureSize(tile.texture, &texW, &texH);
-            float previewW = texW * gColliderZoom;
-            float previewH = texH * gColliderZoom;
-            float previewX = (windowW - previewW) / 2;
-            float previewY = (windowH - previewH) / 2;
-
-            if (e.button.x >= previewX && e.button.x <= previewX + previewW &&
-                e.button.y >= previewY && e.button.y <= previewY + previewH) {
-
-                // Convert Screen Mouse -> Texture Pixel Coordinates
-                float localX = (e.button.x - previewX) / gColliderZoom;
-                float localY = (e.button.y - previewY) / gColliderZoom;
-
-                // Determine which edge to update based on "Quadrants"
-                float distToLeft = localX;
-                float distToRight = texW - localX;
-                float distToTop = localY;
-                float distToBottom = texH - localY;
-
-                float minH = std::min(distToLeft, distToRight);
-                float minV = std::min(distToTop, distToBottom);
-
-                if (minH < minV) {
-                    // Closer to horizontal sides
-                    if (distToLeft < distToRight) tile.collider.offsetLeft = (int)localX;
-                    else tile.collider.offsetRight = (int)(texW - localX);
-                }
-                else {
-                    // Closer to vertical sides
-                    if (distToTop < distToBottom) tile.collider.offsetTop = (int)localY;
-                    else tile.collider.offsetBottom = (int)(texH - localY);
-                }
-
-                // Safety Clamping
-                if (tile.collider.offsetLeft + tile.collider.offsetRight >= texW) tile.collider.offsetRight = (int)texW - tile.collider.offsetLeft - 1;
-                if (tile.collider.offsetTop + tile.collider.offsetBottom >= texH) tile.collider.offsetBottom = (int)texH - tile.collider.offsetTop - 1;
-            }
+            if (tile.collider.offsetLeft + tile.collider.offsetRight >= texW)
+                tile.collider.offsetRight = (int)texW - tile.collider.offsetLeft - 1;
+            if (tile.collider.offsetTop + tile.collider.offsetBottom >= texH)
+                tile.collider.offsetBottom = (int)texH - tile.collider.offsetTop - 1;
         }
     }
 }
@@ -1140,17 +1067,32 @@ void handleColliderInput(SDL_Event& e) {
 void handleEvents(bool& quit) {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
-        if (e.type == SDL_EVENT_QUIT) {
-            quit = true;
-        }
+        if (e.type == SDL_EVENT_QUIT) { quit = true; return; }
 
-        if (gShowColliderEditor) {
-            handleColliderInput(e);
-            continue;
-        }
+        if (gShowColliderEditor) { handleColliderInput(e); continue; }
 
         if (e.type == SDL_EVENT_KEY_DOWN) {
-            if (gIsEditingGridSize) {
+            // Handle Level Name Input
+            if (gIsEditingLevelName) {
+                if (e.key.key == SDLK_RETURN || e.key.key == SDLK_KP_ENTER) {
+                    if (!gLevels.empty()) {
+                        gLevels[gCurrentLevelIndex].name = gLevelNameInput;
+                        std::cout << "[Status] Level name set to: " << (gLevelNameInput.empty() ? "(default)" : gLevelNameInput) << std::endl;
+                    }
+                    gIsEditingLevelName = false;
+                    SDL_StopTextInput(gWindow);
+                }
+                else if (e.key.key == SDLK_ESCAPE) {
+                    if (!gLevels.empty()) gLevelNameInput = gLevels[gCurrentLevelIndex].name;
+                    gIsEditingLevelName = false;
+                    SDL_StopTextInput(gWindow);
+                }
+                else if (e.key.key == SDLK_BACKSPACE && !gLevelNameInput.empty()) {
+                    gLevelNameInput.pop_back();
+                }
+            }
+            // Handle Grid Size Input
+            else if (gIsEditingGridSize) {
                 if (e.key.key == SDLK_RETURN || e.key.key == SDLK_KP_ENTER) {
                     if (!gGridSizeInput.empty()) {
                         try {
@@ -1164,13 +1106,8 @@ void handleEvents(bool& quit) {
                                     }
                                 }
                             }
-                            else {
-                                std::cout << "[Error] Grid size must be between 5 and 100" << std::endl;
-                            }
                         }
-                        catch (const std::exception& e) {
-                            std::cout << "[Error] Invalid grid size input: " << e.what() << std::endl;
-                        }
+                        catch (...) {}
                     }
                     gIsEditingGridSize = false;
                     SDL_StopTextInput(gWindow);
@@ -1184,69 +1121,49 @@ void handleEvents(bool& quit) {
                     gGridSizeInput.pop_back();
                 }
             }
+            // Normal keyboard shortcuts
             else {
-                if (e.key.key == SDLK_S && (e.key.mod & SDL_KMOD_CTRL)) {
-                    saveLevels();
+                if (e.key.key == SDLK_S && (e.key.mod & SDL_KMOD_CTRL)) saveLevels();
+                else if (e.key.key == SDLK_N && (e.key.mod & SDL_KMOD_CTRL)) addNewLevel();
+                else if (e.key.key == SDLK_D && (e.key.mod & SDL_KMOD_CTRL)) deleteCurrentLevel();
+                else if (e.key.key == SDLK_LEFT && gCurrentLevelIndex > 0) {
+                    gCurrentLevelIndex--;
+                    std::cout << "[Status] Switched to Level " << gCurrentLevelIndex + 1 << std::endl;
                 }
-                else if (e.key.key == SDLK_N && (e.key.mod & SDL_KMOD_CTRL)) {
-                    addNewLevel();
+                else if (e.key.key == SDLK_RIGHT && gCurrentLevelIndex < gLevels.size() - 1) {
+                    gCurrentLevelIndex++;
+                    std::cout << "[Status] Switched to Level " << gCurrentLevelIndex + 1 << std::endl;
                 }
-                else if (e.key.key == SDLK_D && (e.key.mod & SDL_KMOD_CTRL)) {
-                    deleteCurrentLevel();
+                else if (e.key.key == SDLK_TAB && !gLevels.empty()) {
+                    Level& cl = gLevels[gCurrentLevelIndex];
+                    cl.activeLayer = (cl.activeLayer + 1) % NUM_LAYERS;
                 }
-                else if (e.key.key == SDLK_LEFT) {
-                    if (gCurrentLevelIndex > 0) {
-                        gCurrentLevelIndex--;
-                        std::cout << "[Status] Switched to Level " << gCurrentLevelIndex + 1 << std::endl;
-                    }
+                else if (e.key.key == SDLK_V && !gLevels.empty()) {
+                    Level& cl = gLevels[gCurrentLevelIndex];
+                    cl.layers[cl.activeLayer].visible = !cl.layers[cl.activeLayer].visible;
                 }
-                else if (e.key.key == SDLK_RIGHT) {
-                    if (gCurrentLevelIndex < gLevels.size() - 1) {
-                        gCurrentLevelIndex++;
-                        std::cout << "[Status] Switched to Level " << gCurrentLevelIndex + 1 << std::endl;
-                    }
+                else if (e.key.key >= SDLK_1 && e.key.key <= SDLK_5 && !gLevels.empty()) {
+                    int layerNum = e.key.key - SDLK_1;
+                    if (layerNum < NUM_LAYERS) gLevels[gCurrentLevelIndex].activeLayer = layerNum;
                 }
-                else if (e.key.key == SDLK_TAB) {
-                    if (!gLevels.empty()) {
-                        Level& currentLevel = gLevels[gCurrentLevelIndex];
-                        currentLevel.activeLayer = (currentLevel.activeLayer + 1) % NUM_LAYERS;
-                        std::cout << "[Status] Switched to " << currentLevel.layers[currentLevel.activeLayer].name << " layer" << std::endl;
-                    }
-                }
-                else if (e.key.key == SDLK_V) {
-                    if (!gLevels.empty()) {
-                        Level& currentLevel = gLevels[gCurrentLevelIndex];
-                        currentLevel.layers[currentLevel.activeLayer].visible =
-                            !currentLevel.layers[currentLevel.activeLayer].visible;
-                        std::cout << "[Status] " << currentLevel.layers[currentLevel.activeLayer].name
-                            << " layer " << (currentLevel.layers[currentLevel.activeLayer].visible ? "shown" : "hidden") << std::endl;
-                    }
-                }
-                else if (e.key.key >= SDLK_1 && e.key.key <= SDLK_5) {
-                    if (!gLevels.empty()) {
-                        int layerNum = e.key.key - SDLK_1;
-                        if (layerNum < NUM_LAYERS) {
-                            gLevels[gCurrentLevelIndex].activeLayer = layerNum;
-                            std::cout << "[Status] Switched to " << LAYER_NAMES[layerNum] << " layer" << std::endl;
-                        }
-                    }
-                }
-                else if (e.key.key == SDLK_SPACE) {
-                    snapToNearestTile();
-                }
-                else if (e.key.key == SDLK_C) {
-                    gShowColliderEditor = true;
-                    std::cout << "[UI] Opened Collider Editor for Tile " << gSelectedTileType << std::endl;
-                }
+                else if (e.key.key == SDLK_SPACE) snapToNearestTile();
+                else if (e.key.key == SDLK_C) gShowColliderEditor = true;
             }
         }
         else if (e.type == SDL_EVENT_TEXT_INPUT) {
-            if (gIsEditingGridSize) {
+            if (gIsEditingLevelName) {
+                for (int i = 0; e.text.text[i] != '\0'; ++i) {
+                    char c = e.text.text[i];
+                    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                        (c >= '0' && c <= '9') || c == '_') {
+                        if (gLevelNameInput.length() < 20) gLevelNameInput += c;
+                    }
+                }
+            }
+            else if (gIsEditingGridSize) {
                 for (int i = 0; e.text.text[i] != '\0'; ++i) {
                     if (e.text.text[i] >= '0' && e.text.text[i] <= '9') {
-                        if (gGridSizeInput.length() < 3) {
-                            gGridSizeInput += e.text.text[i];
-                        }
+                        if (gGridSizeInput.length() < 3) gGridSizeInput += e.text.text[i];
                     }
                 }
             }
@@ -1257,22 +1174,35 @@ void handleEvents(bool& quit) {
                 SDL_GetWindowSize(gWindow, &windowW, &windowH);
                 float panelX = (float)(windowW - TILE_PANEL_WIDTH);
 
+                // Check Level Name Input click
+                float nameLabelW = 95;
+                SDL_FRect nameValueRect = { 20 + nameLabelW + 5, 15, 145, 25 };
+                if (e.button.x >= nameValueRect.x && e.button.x <= nameValueRect.x + nameValueRect.w &&
+                    e.button.y >= nameValueRect.y && e.button.y <= nameValueRect.y + nameValueRect.h) {
+                    gIsEditingLevelName = true;
+                    gIsEditingGridSize = false;
+                    if (!gLevels.empty()) gLevelNameInput = gLevels[gCurrentLevelIndex].name;
+                    SDL_StartTextInput(gWindow);
+                    continue;
+                }
+
+                // Check Grid Size Input click
                 float uiWidth = 200;
                 float uiX = (float)windowW - uiWidth - 10 - TILE_PANEL_WIDTH;
                 int labelW = 80;
                 SDL_FRect valueRect = { uiX + 10 + (float)labelW + 5, 15, 60, 25 };
-
                 if (e.button.x >= valueRect.x && e.button.x <= valueRect.x + valueRect.w &&
                     e.button.y >= valueRect.y && e.button.y <= valueRect.y + valueRect.h) {
                     gIsEditingGridSize = true;
+                    gIsEditingLevelName = false;
                     gGridSizeInput = "";
                     SDL_StartTextInput(gWindow);
+                    continue;
                 }
-                else if (e.button.x >= panelX) {
-                    float tileY = 50;
-                    float tileSize = 60;
-                    float spacing = 8;
 
+                // Tile Panel
+                if (e.button.x >= panelX) {
+                    float tileY = 50, tileSize = 60, spacing = 8;
                     int totalTiles = (int)gTileTextures.size();
                     float viewportHeight = windowH - tileY - 10;
                     float contentHeight = totalTiles * (tileSize + spacing);
@@ -1280,13 +1210,11 @@ void handleEvents(bool& quit) {
                     if (contentHeight > viewportHeight) {
                         float scrollbarWidth = 8;
                         float scrollbarX = panelX + TILE_PANEL_WIDTH - scrollbarWidth - 5;
-
                         if (e.button.x >= scrollbarX && e.button.x <= scrollbarX + scrollbarWidth &&
                             e.button.y >= tileY && e.button.y <= tileY + viewportHeight) {
                             gIsDraggingScrollbar = true;
                             float maxScroll = std::max(0.0f, contentHeight - viewportHeight);
-                            float thumbHeight = (viewportHeight / contentHeight) * viewportHeight;
-                            thumbHeight = std::max(20.0f, thumbHeight);
+                            float thumbHeight = std::max(20.0f, (viewportHeight / contentHeight) * viewportHeight);
                             float thumbY = tileY + (gTilePanelScroll / maxScroll) * (viewportHeight - thumbHeight);
                             gScrollbarDragOffset = e.button.y - thumbY;
                         }
@@ -1297,36 +1225,35 @@ void handleEvents(bool& quit) {
                             float itemY = tileY + (i * (tileSize + spacing)) - gTilePanelScroll;
                             if (e.button.y >= itemY && e.button.y <= itemY + tileSize) {
                                 gSelectedTileType = i;
-                                std::cout << "[Status] Selected tile " << i << std::endl;
                                 break;
                             }
                         }
                     }
                 }
                 else {
+                    // Map area click
                     gIsEditingGridSize = false;
+                    gIsEditingLevelName = false;
                     SDL_StopTextInput(gWindow);
                     gMouseDownX = (float)e.button.x;
                     gMouseDownY = (float)e.button.y;
 
                     if (!gLevels.empty()) {
                         Level& currentLevel = gLevels[gCurrentLevelIndex];
-                        if (currentLevel.layers[currentLevel.activeLayer].map.empty()) continue;
-                        int mapSize = (int)currentLevel.layers[0].map.size();
-                        float tileWidth, tileHeight;
-                        updateTileSizes(currentLevel.zoomLevel, tileWidth, tileHeight);
+                        if (!currentLevel.layers[currentLevel.activeLayer].map.empty()) {
+                            int mapSize = (int)currentLevel.layers[0].map.size();
+                            float tileWidth, tileHeight;
+                            updateTileSizes(currentLevel.zoomLevel, tileWidth, tileHeight);
 
-                        SDL_FPoint cart = screenToCartesian((float)e.button.x, (float)e.button.y,
-                            tileWidth, tileHeight,
-                            currentLevel.mapOffsetX, currentLevel.mapOffsetY);
+                            SDL_FPoint cart = screenToCartesian((float)e.button.x, (float)e.button.y,
+                                tileWidth, tileHeight, currentLevel.mapOffsetX, currentLevel.mapOffsetY);
 
-                        int gridX = (int)std::round(cart.x);
-                        int gridY = (int)std::round(cart.y);
+                            int gridX = (int)std::round(cart.x);
+                            int gridY = (int)std::round(cart.y);
 
-                        if (gridX >= 0 && gridX < mapSize && gridY >= 0 && gridY < mapSize &&
-                            gridX < (int)currentLevel.layers[currentLevel.activeLayer].map.size() &&
-                            gridY < (int)currentLevel.layers[currentLevel.activeLayer].map[gridX].size()) {
-                            currentLevel.layers[currentLevel.activeLayer].map[gridX][gridY].tileID = gSelectedTileType;
+                            if (gridX >= 0 && gridX < mapSize && gridY >= 0 && gridY < mapSize) {
+                                currentLevel.layers[currentLevel.activeLayer].map[gridX][gridY].tileID = gSelectedTileType;
+                            }
                         }
                     }
                 }
@@ -1341,29 +1268,21 @@ void handleEvents(bool& quit) {
         }
         else if (e.type == SDL_EVENT_MOUSE_BUTTON_UP) {
             if (e.button.button == SDL_BUTTON_RIGHT) {
-                float dragDistance = std::sqrt(std::pow(e.button.x - gMouseDownX, 2) +
-                    std::pow(e.button.y - gMouseDownY, 2));
-                if (dragDistance < DRAG_THRESHOLD) {
-                    if (!gLevels.empty()) {
-                        Level& currentLevel = gLevels[gCurrentLevelIndex];
-                        if (currentLevel.layers[currentLevel.activeLayer].map.empty()) {
-                            gIsDragging = false;
-                            continue;
-                        }
+                float dragDistance = std::sqrt(std::pow(e.button.x - gMouseDownX, 2) + std::pow(e.button.y - gMouseDownY, 2));
+                if (dragDistance < DRAG_THRESHOLD && !gLevels.empty()) {
+                    Level& currentLevel = gLevels[gCurrentLevelIndex];
+                    if (!currentLevel.layers[currentLevel.activeLayer].map.empty()) {
                         int mapSize = (int)currentLevel.layers[0].map.size();
                         float tileWidth, tileHeight;
                         updateTileSizes(currentLevel.zoomLevel, tileWidth, tileHeight);
 
                         SDL_FPoint cart = screenToCartesian((float)e.button.x, (float)e.button.y,
-                            tileWidth, tileHeight,
-                            currentLevel.mapOffsetX, currentLevel.mapOffsetY);
+                            tileWidth, tileHeight, currentLevel.mapOffsetX, currentLevel.mapOffsetY);
 
                         int gridX = (int)std::round(cart.x);
                         int gridY = (int)std::round(cart.y);
 
-                        if (gridX >= 0 && gridX < mapSize && gridY >= 0 && gridY < mapSize &&
-                            gridX < (int)currentLevel.layers[currentLevel.activeLayer].map.size() &&
-                            gridY < (int)currentLevel.layers[currentLevel.activeLayer].map[gridX].size()) {
+                        if (gridX >= 0 && gridX < mapSize && gridY >= 0 && gridY < mapSize) {
                             int defaultID = (currentLevel.activeLayer == 0) ? 1 : 0;
                             currentLevel.layers[currentLevel.activeLayer].map[gridX][gridY].tileID = defaultID;
                         }
@@ -1394,18 +1313,13 @@ void handleEvents(bool& quit) {
                 float tileY = 50;
                 float viewportHeight = windowH - tileY - 10;
                 int totalTiles = (int)gTileTextures.size();
-                float tileSize = 60;
-                float spacing = 8;
+                float tileSize = 60, spacing = 8;
                 float contentHeight = totalTiles * (tileSize + spacing);
                 float maxScroll = std::max(0.0f, contentHeight - viewportHeight);
-
-                float thumbHeight = (viewportHeight / contentHeight) * viewportHeight;
-                thumbHeight = std::max(20.0f, thumbHeight);
-
+                float thumbHeight = std::max(20.0f, (viewportHeight / contentHeight) * viewportHeight);
                 float thumbY = e.motion.y - gScrollbarDragOffset;
                 float scrollRatio = (thumbY - tileY) / (viewportHeight - thumbHeight);
-                gTilePanelScroll = scrollRatio * maxScroll;
-                gTilePanelScroll = std::max(0.0f, std::min(maxScroll, gTilePanelScroll));
+                gTilePanelScroll = std::max(0.0f, std::min(maxScroll, scrollRatio * maxScroll));
             }
             else if (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_LMASK) {
                 int windowW, windowH;
@@ -1414,22 +1328,20 @@ void handleEvents(bool& quit) {
 
                 if (e.motion.x < panelX && !gLevels.empty()) {
                     Level& currentLevel = gLevels[gCurrentLevelIndex];
-                    if (currentLevel.layers[currentLevel.activeLayer].map.empty()) continue;
-                    int mapSize = (int)currentLevel.layers[0].map.size();
-                    float tileWidth, tileHeight;
-                    updateTileSizes(currentLevel.zoomLevel, tileWidth, tileHeight);
+                    if (!currentLevel.layers[currentLevel.activeLayer].map.empty()) {
+                        int mapSize = (int)currentLevel.layers[0].map.size();
+                        float tileWidth, tileHeight;
+                        updateTileSizes(currentLevel.zoomLevel, tileWidth, tileHeight);
 
-                    SDL_FPoint cart = screenToCartesian((float)e.motion.x, (float)e.motion.y,
-                        tileWidth, tileHeight,
-                        currentLevel.mapOffsetX, currentLevel.mapOffsetY);
+                        SDL_FPoint cart = screenToCartesian((float)e.motion.x, (float)e.motion.y,
+                            tileWidth, tileHeight, currentLevel.mapOffsetX, currentLevel.mapOffsetY);
 
-                    int gridX = (int)std::round(cart.x);
-                    int gridY = (int)std::round(cart.y);
+                        int gridX = (int)std::round(cart.x);
+                        int gridY = (int)std::round(cart.y);
 
-                    if (gridX >= 0 && gridX < mapSize && gridY >= 0 && gridY < mapSize &&
-                        gridX < (int)currentLevel.layers[currentLevel.activeLayer].map.size() &&
-                        gridY < (int)currentLevel.layers[currentLevel.activeLayer].map[gridX].size()) {
-                        currentLevel.layers[currentLevel.activeLayer].map[gridX][gridY].tileID = gSelectedTileType;
+                        if (gridX >= 0 && gridX < mapSize && gridY >= 0 && gridY < mapSize) {
+                            currentLevel.layers[currentLevel.activeLayer].map[gridX][gridY].tileID = gSelectedTileType;
+                        }
                     }
                 }
             }
@@ -1438,7 +1350,6 @@ void handleEvents(bool& quit) {
             int windowW, windowH;
             SDL_GetWindowSize(gWindow, &windowW, &windowH);
             float panelX = (float)(windowW - TILE_PANEL_WIDTH);
-
             float mouseX, mouseY;
             SDL_GetMouseState(&mouseX, &mouseY);
 
@@ -1450,7 +1361,6 @@ void handleEvents(bool& quit) {
                 float oldZoom = currentLevel.zoomLevel;
                 currentLevel.zoomLevel += e.wheel.y * 0.1f;
                 currentLevel.zoomLevel = std::max(0.5f, std::min(3.0f, currentLevel.zoomLevel));
-
                 if (oldZoom != currentLevel.zoomLevel) {
                     std::cout << "[Status] Zoom: " << (int)(currentLevel.zoomLevel * 100) << "%" << std::endl;
                 }
