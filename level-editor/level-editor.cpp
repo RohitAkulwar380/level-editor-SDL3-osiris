@@ -19,13 +19,13 @@ const int INITIAL_SCREEN_HEIGHT = 720;
 const int TILE_PANEL_WIDTH = 250;
 int gMapSize = 25;
 const float BASE_TILE_WIDTH = 32.0f;
-const int NUM_LAYERS = 5;
+const int NUM_LAYERS = 6;
 
 const std::string SAVE_PATH = "assets\\levels\\";
 const std::string ASSET_PATH = "assets\\isometric tileset\\separated images\\";
 const std::string COLLIDER_SAVE_FILE = SAVE_PATH + "tile_colliders.csv";
 
-const std::string LAYER_NAMES[NUM_LAYERS] = { "Terrain", "Player", "Furniture", "Enemy", "NPCs" };
+const std::string LAYER_NAMES[NUM_LAYERS] = { "Terrain", "Player", "Furniture", "Enemy", "NPCs", "Portal"};
 
 // --- Data Structures ---
 
@@ -438,7 +438,7 @@ bool saveLevels() {
             metaFile.close();
         }
 
-        const char* layerSuffix[NUM_LAYERS] = { "terrain", "player", "furniture", "enemy", "npcs" };
+        const char* layerSuffix[NUM_LAYERS] = { "terrain", "player", "furniture", "enemy", "npcs", "portal"};
 
         for (int layerIdx = 0; layerIdx < NUM_LAYERS; ++layerIdx) {
             std::string filename = SAVE_PATH + prefix + "_" + layerSuffix[layerIdx] + ".csv";
@@ -520,7 +520,7 @@ bool loadLevels() {
             }
             metaFile.close();
 
-            const char* layerSuffix[NUM_LAYERS] = { "terrain", "player", "furniture", "enemy", "npcs" };
+            const char* layerSuffix[NUM_LAYERS] = { "terrain", "player", "furniture", "enemy", "npcs", "portal" };
 
             for (int layerIdx = 0; layerIdx < NUM_LAYERS; ++layerIdx) {
                 std::string layerFilename = SAVE_PATH + "level_" + std::to_string(levelIndex) + "_" +
