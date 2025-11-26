@@ -1,0 +1,4 @@
+Asset_name,asset_id,layer_name,layer_number,grid_height,grid_width
+tile_1,1,Terrain,0,100,100
+tile_3,3,Player,1,100,100
+tile_115,115,Player,1,100,100
